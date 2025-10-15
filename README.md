@@ -10,19 +10,26 @@ This MCP server provides comprehensive access to Hevy's fitness tracking capabil
 - **`get_workouts`** - Browse your workout history (paginated)
 - **`get_workout`** - Get detailed information about a specific workout
 - **`create_workout`** - Log a new workout with exercises, sets, weights, and reps
+- **`update_workout`** - Update an existing workout
 - **`get_workouts_count`** - Get total number of workouts logged
+- **`get_workout_events`** - Get workout change events (updates/deletes) since a date for syncing
 
 ### Routines
 - **`get_routines`** - List your workout routines
 - **`get_routine`** - Get details of a specific routine
 - **`create_routine`** - Create a new workout routine template
+- **`update_routine`** - Update an existing routine
 
 ### Exercises
 - **`get_exercise_templates`** - Browse available exercises (includes both Hevy's library and your custom exercises)
+- **`get_exercise_template`** - Get detailed information about a specific exercise template
+- **`create_exercise_template`** - Create a custom exercise template
 - **`get_exercise_history`** - View your performance history for a specific exercise
 
 ### Organization
 - **`get_routine_folders`** - List your routine folders for organization
+- **`get_routine_folder`** - Get details of a specific routine folder
+- **`create_routine_folder`** - Create a new routine folder
 
 ## 🚀 Quick Start
 
@@ -114,23 +121,75 @@ The assistant will:
 
 > "What's my exercise history for deadlifts?"
 
+> "Get all workout changes since January 1st, 2024"
+
+The assistant will use `get_workout_events` to sync recent changes.
+
 ### Managing Routines
 
 > "Create a new Push Day routine with bench press (4 sets of 8-12 reps at 100kg) and overhead press (3 sets of 10 reps at 60kg)"
+
+The assistant will use the `repRange` field for exercises with rep ranges like "8-12 reps".
+
+> "Update my Upper Body routine to add pull-ups"
+
+The assistant will use `update_routine` to modify existing routines.
+
+### Creating Custom Exercises
+
+> "Create a custom exercise called 'Tom's Special Cable Flyes' for chest using the cable machine"
+
+The assistant will use `create_exercise_template` with the appropriate muscle groups and equipment category.
+
+### Organizing Routines
+
+> "Create a new folder called 'Summer 2024 Programs'"
+
+The assistant will use `create_routine_folder` to organize your routines.
 
 ## 🔧 API Details
 
 ### Workout Structure
 
-When creating workouts, exercises must include:
-- `exerciseTemplateId` - Get this from `get_exercise_templates`
-- `sets` - Array of set data with:
-  - `type` - "warmup", "normal", "failure", or "dropset"
-  - `weightKg` - Weight in kilograms (optional)
-  - `reps` - Number of repetitions (optional)
-  - `distanceMeters` - For cardio exercises (optional)
-  - `durationSeconds` - For timed exercises (optional)
-  - `rpe` - Rating of Perceived Exertion, 6-10 (optional)
+When creating workouts, you can specify:
+- `title` - Name of the workout (required)
+- `startTime` - When the workout started (required, ISO 8601 format)
+- `endTime` - When the workout ended (required, ISO 8601 format)
+- `routineId` - Optional routine ID this workout belongs to
+- `description` - Optional workout description
+- `isPrivate` - Whether the workout is private (optional, default: false)
+- `exercises` - Array of exercises, each with:
+  - `exerciseTemplateId` - Get this from `get_exercise_templates` (required)
+  - `supersetId` - Optional superset ID (null if not in a superset)
+  - `notes` - Optional notes for this exercise
+  - `sets` - Array of set data with:
+    - `type` - "warmup", "normal", "failure", or "dropset" (optional)
+    - `weightKg` - Weight in kilograms (optional)
+    - `reps` - Number of repetitions (optional)
+    - `distanceMeters` - For cardio exercises (optional)
+    - `durationSeconds` - For timed exercises (optional)
+    - `customMetric` - Custom metric for steps/floors (optional)
+    - `rpe` - Rating of Perceived Exertion, 6-10 (optional)
+
+### Routine Structure
+
+When creating routines, you can specify:
+- `title` - Name of the routine (required)
+- `folderId` - Optional folder ID (null for default "My Routines" folder)
+- `notes` - Optional notes for the routine
+- `exercises` - Array of exercises, each with:
+  - `exerciseTemplateId` - Get this from `get_exercise_templates` (required)
+  - `supersetId` - Optional superset ID (null if not in a superset)
+  - `restSeconds` - Rest time in seconds between sets (optional)
+  - `notes` - Optional notes for this exercise
+  - `sets` - Array of set data with:
+    - `type` - "warmup", "normal", "failure", or "dropset" (optional)
+    - `weightKg` - Weight in kilograms (optional)
+    - `reps` - Number of repetitions (optional)
+    - `repRange` - Rep range object with `start` and `end` (optional, e.g., 8-12 reps)
+    - `distanceMeters` - For cardio exercises (optional)
+    - `durationSeconds` - For timed exercises (optional)
+    - `customMetric` - Custom metric for steps/floors (optional)
 
 ### Time Format
 

@@ -263,4 +263,11 @@ export class HevyClient {
   async createRoutineFolder(folder: any): Promise<any> {
     return this.post<any>('/v1/routine_folders', folder);
   }
+
+  /**
+   * Create a new custom exercise template
+   */
+  async createExerciseTemplate(exercise: any): Promise<any> {
+    return this.post<any>('/v1/exercise_templates', exercise);
+  }
 }
