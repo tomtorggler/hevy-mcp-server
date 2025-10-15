@@ -6,14 +6,15 @@ A remote Model Context Protocol (MCP) server for the Hevy fitness tracking API, 
 
 This project provides a remote MCP server that exposes Hevy API functionality as MCP tools. It allows AI assistants like Claude to interact with your Hevy workout data without authentication complexity.
 
-**Live URL:** https://hevy-mcp-server.tom-7bc.workers.dev/sse
+**Live URL:** https://hevy-mcp-server.tom-7bc.workers.dev/mcp
 
 ## Features
 
 - **Authless MCP Server**: No OAuth required for clients to connect
 - **Hevy API Integration**: Secure API key stored as Cloudflare secret
-- **Remote Access**: Works from any MCP client via SSE transport
+- **Remote Access**: Works from any MCP client via streamable-http transport
 - **Edge Deployment**: Fast global access via Cloudflare Workers
+- **Future-Proof**: Uses streamable-http transport (SSE is deprecated in MCP spec)
 
 ## Available Tools
 
@@ -122,7 +123,7 @@ cp .dev.vars.example .dev.vars
 npm start
 ```
 
-Server will run at: http://localhost:8787/sse
+Server will run at: http://localhost:8787/mcp (streamable-http)
 
 ### Testing Locally
 
@@ -130,7 +131,7 @@ You can test the local server using:
 
 **MCP Inspector:**
 ```bash
-npx @modelcontextprotocol/inspector http://localhost:8787/sse
+npx @modelcontextprotocol/inspector http://localhost:8787/mcp
 ```
 
 **Claude Desktop:**
@@ -140,7 +141,7 @@ Add to your Claude Desktop config (`~/Library/Application Support/Claude/claude_
   "mcpServers": {
     "hevy": {
       "command": "npx",
-      "args": ["mcp-remote", "http://localhost:8787/sse"]
+      "args": ["mcp-remote", "http://localhost:8787/mcp"]
     }
   }
 }
@@ -165,7 +166,7 @@ echo "your-api-key" | npx wrangler secret put HEVY_API_KEY
 npm run deploy
 ```
 
-Your server will be live at: `https://hevy-mcp-server.tom-7bc.workers.dev/sse`
+Your server will be live at: `https://hevy-mcp-server.tom-7bc.workers.dev/mcp`
 
 ### Verify Deployment
 
@@ -189,7 +190,7 @@ Add to your config:
   "mcpServers": {
     "hevy": {
       "command": "npx",
-      "args": ["mcp-remote", "https://hevy-mcp-server.tom-7bc.workers.dev/sse"]
+      "args": ["mcp-remote", "https://hevy-mcp-server.tom-7bc.workers.dev/mcp"]
     }
   }
 }
@@ -198,14 +199,14 @@ Add to your config:
 ### Cloudflare AI Playground
 
 1. Go to https://playground.ai.cloudflare.com/
-2. Enter URL: `https://hevy-mcp-server.tom-7bc.workers.dev/sse`
+2. Enter URL: `https://hevy-mcp-server.tom-7bc.workers.dev/mcp`
 3. Start using the tools
 
 ### Other MCP Clients
 
 Use the `mcp-remote` adapter:
 ```bash
-npx mcp-remote https://hevy-mcp-server.tom-7bc.workers.dev/sse
+npx mcp-remote https://hevy-mcp-server.tom-7bc.workers.dev/mcp
 ```
 
 ## API Reference
@@ -243,8 +244,9 @@ The MCP server uses Cloudflare Durable Objects to maintain stateful connections:
 
 ### Transport
 
-- **Primary:** Server-Sent Events (SSE) at `/sse`
-- **Alternative:** Standard MCP protocol at `/mcp`
+- **Primary:** Streamable HTTP at `/mcp` (recommended)
+- **Legacy:** Server-Sent Events (SSE) at `/sse` (deprecated)
+- **Health Check:** `/health` endpoint for monitoring
 
 ### Security
 
@@ -301,6 +303,38 @@ this.server.tool(
 
 Wrangler automatically reloads on file changes during development.
 
+## Migration from SSE to Streamable HTTP
+
+This server has been migrated from Server-Sent Events (SSE) to streamable-http transport for better performance and future compatibility.
+
+### What Changed
+
+- **Primary endpoint**: `/sse` → `/mcp`
+- **Transport**: SSE → streamable-http
+- **SDK version**: 1.19.1 → 1.20.0
+- **Session management**: Improved with better error handling
+
+### For Existing Users
+
+1. **Update your MCP client configuration**:
+   - Change URL from `https://hevy-mcp-server.tom-7bc.workers.dev/sse` to `https://hevy-mcp-server.tom-7bc.workers.dev/mcp`
+   - Add `Accept: application/json, text/event-stream` header if needed
+
+2. **Legacy SSE endpoint**:
+   - The `/sse` endpoint is still available for backward compatibility
+   - However, it's deprecated and will be removed in future versions
+
+3. **Health monitoring**:
+   - New `/health` endpoint provides server status information
+
+### Benefits of Streamable HTTP
+
+- **Better Performance**: More efficient than SSE for MCP
+- **Stateless Option**: Can run without Durable Objects if needed
+- **Future-Proof**: SSE is being deprecated in MCP specification
+- **Better Error Handling**: More robust connection management
+- **Cloudflare Optimized**: Better suited for serverless environments
+
 ## Troubleshooting
 
 ### API Key Not Working
@@ -318,12 +352,20 @@ echo "your-api-key" | npx wrangler secret put HEVY_API_KEY
 ### Connection Issues
 
 Verify server is running:
-- Local: http://localhost:8787/sse
-- Production: https://hevy-mcp-server.tom-7bc.workers.dev/sse
+- Local: http://localhost:8787/mcp (streamable-http)
+- Production: https://hevy-mcp-server.tom-7bc.workers.dev/mcp
+- Health check: https://hevy-mcp-server.tom-7bc.workers.dev/health
 
 Test with curl:
 ```bash
-curl https://hevy-mcp-server.tom-7bc.workers.dev/sse
+# Test health endpoint
+curl https://hevy-mcp-server.tom-7bc.workers.dev/health
+
+# Test MCP initialization
+curl -X POST https://hevy-mcp-server.tom-7bc.workers.dev/mcp \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -d '{"jsonrpc":"2.0","method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0.0"}},"id":1}'
 ```
 
 ### Deployment Errors
@@ -353,6 +395,13 @@ This project is for personal use with the Hevy API.
 Tom (tom@uclab.eu)
 
 ## Version
+
+2.1.0 - Streamable HTTP Migration:
+- ✅ Migrated from SSE to streamable-http transport (future-proof)
+- ✅ Updated to @modelcontextprotocol/sdk@1.20.0
+- ✅ Maintained backward compatibility with legacy SSE endpoint
+- ✅ Added health check endpoint for monitoring
+- ✅ Improved error handling and session management
 
 2.0.0 - Expanded release with comprehensive Hevy API coverage:
 - ✅ 10 total tools covering all major Hevy API endpoints

@@ -8,6 +8,7 @@ export class MyMCP extends McpAgent {
 	server = new McpServer({
 		name: "Hevy API",
 		version: "2.0.0",
+		description: "Remote MCP server for Hevy fitness tracking API with streamable-http transport",
 	});
 
 	private client!: HevyClient;
@@ -15,7 +16,7 @@ export class MyMCP extends McpAgent {
 	async init() {
 		// Initialize Hevy API client with environment API key
 		this.client = new HevyClient({
-			apiKey: this.env.HEVY_API_KEY,
+			apiKey: (this.env as any).HEVY_API_KEY,
 		});
 
 		// ============================================
@@ -508,12 +509,25 @@ export default {
 	fetch(request: Request, env: Env, ctx: ExecutionContext) {
 		const url = new URL(request.url);
 
+		// Streamable HTTP transport (primary endpoint)
+		if (url.pathname === "/mcp") {
+			return MyMCP.serve("/mcp").fetch(request, env, ctx);
+		}
+
+		// Legacy SSE endpoint for backward compatibility
 		if (url.pathname === "/sse" || url.pathname === "/sse/message") {
 			return MyMCP.serveSSE("/sse").fetch(request, env, ctx);
 		}
 
-		if (url.pathname === "/mcp") {
-			return MyMCP.serve("/mcp").fetch(request, env, ctx);
+		// Health check endpoint
+		if (url.pathname === "/health") {
+			return new Response(JSON.stringify({ 
+				status: "healthy", 
+				transport: "streamable-http",
+				version: "2.0.0"
+			}), {
+				headers: { "Content-Type": "application/json" }
+			});
 		}
 
 		return new Response("Not found", { status: 404 });
