@@ -159,6 +159,7 @@ When creating workouts, you can specify:
 - `description` - Optional workout description
 - `isPrivate` - Whether the workout is private (optional, default: false)
 - `exercises` - Array of exercises, each with:
+  - `title` - Exercise name from the template (required)
   - `exerciseTemplateId` - Get this from `get_exercise_templates` (required)
   - `supersetId` - Optional superset ID (null if not in a superset)
   - `notes` - Optional notes for this exercise
@@ -171,6 +172,8 @@ When creating workouts, you can specify:
     - `customMetric` - Custom metric for steps/floors (optional)
     - `rpe` - Rating of Perceived Exertion, 6-10 (optional)
 
+**Note:** The `index` field for exercises and sets is automatically generated based on their position in the array.
+
 ### Routine Structure
 
 When creating routines, you can specify:
@@ -178,6 +181,7 @@ When creating routines, you can specify:
 - `folderId` - Optional folder ID (null for default "My Routines" folder)
 - `notes` - Optional notes for the routine
 - `exercises` - Array of exercises, each with:
+  - `title` - Exercise name from the template (required)
   - `exerciseTemplateId` - Get this from `get_exercise_templates` (required)
   - `supersetId` - Optional superset ID (null if not in a superset)
   - `restSeconds` - Rest time in seconds between sets (optional)
@@ -190,6 +194,8 @@ When creating routines, you can specify:
     - `distanceMeters` - For cardio exercises (optional)
     - `durationSeconds` - For timed exercises (optional)
     - `customMetric` - Custom metric for steps/floors (optional)
+
+**Note:** The `index` field for exercises and sets is automatically generated based on their position in the array.
 
 ### Time Format
 

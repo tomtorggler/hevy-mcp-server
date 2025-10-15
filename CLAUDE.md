@@ -33,6 +33,7 @@ Get a single workout by ID with full details.
 #### `create_workout`
 Log a new workout with exercises and sets.
 - **Parameters:** `title`, `startTime`, `endTime`, `exercises` (array), `description`, `isPrivate`
+- **Note:** Each exercise in the array requires a `title` field (exercise name from template). The `index` fields for exercises and sets are auto-generated.
 
 #### `get_workouts_count`
 Get the total number of workouts in your account.
@@ -51,6 +52,7 @@ Get a single routine by ID with full exercise details.
 #### `create_routine`
 Create a new workout routine/program.
 - **Parameters:** `title`, `exercises` (array), `folderId`, `notes`
+- **Note:** Each exercise in the array requires a `title` field (exercise name from template). The `index` fields for exercises and sets are auto-generated.
 
 ### Exercise Templates
 
@@ -395,6 +397,12 @@ This project is for personal use with the Hevy API.
 Tom (tom@uclab.eu)
 
 ## Version
+
+2.1.1 - Bug Fix Release:
+- 🐛 Fixed missing `index` and `title` fields in create_workout, update_workout, create_routine, and update_routine
+- ✅ Auto-generate `index` fields for exercises and sets based on array position
+- ✅ Added required `title` field to exercise schema (exercise name from template)
+- 📝 Updated documentation to reflect exercise structure requirements
 
 2.1.0 - Streamable HTTP Migration:
 - ✅ Migrated from SSE to streamable-http transport (future-proof)
