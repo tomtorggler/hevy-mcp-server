@@ -7,7 +7,7 @@ import { HevyClient } from "./lib/client.js";
 export class MyMCP extends McpAgent {
 	server = new McpServer({
 		name: "Hevy API",
-		version: "2.1.1",
+		version: "2.1.2",
 		description: "Remote MCP server for Hevy fitness tracking API with streamable-http transport",
 	});
 
@@ -436,7 +436,6 @@ export class MyMCP extends McpAgent {
 				folderId: z.number().optional().nullable().describe("Folder ID (null for default 'My Routines' folder)"),
 				notes: z.string().optional().describe("Notes for the routine"),
 				exercises: z.array(z.object({
-					title: z.string().describe("Exercise name (from exercise template)"),
 					exerciseTemplateId: z.string().describe("Exercise template ID"),
 					supersetId: z.number().optional().nullable().describe("Superset ID (null if not in a superset)"),
 					restSeconds: z.number().optional().nullable().describe("Rest time in seconds between sets"),
@@ -458,15 +457,13 @@ export class MyMCP extends McpAgent {
 			async (args) => {
 				try {
 					// Transform camelCase to snake_case for API
-					const exercises = args.exercises.map((ex: any, exerciseIndex: number) => ({
-						index: exerciseIndex,
-						title: ex.title,
+					// NOTE: Unlike workouts, routines don't use index or title fields in the request
+					const exercises = args.exercises.map((ex: any) => ({
 						exercise_template_id: ex.exerciseTemplateId,
 						superset_id: ex.supersetId,
 						rest_seconds: ex.restSeconds,
 						notes: ex.notes,
-						sets: ex.sets.map((set: any, setIndex: number) => ({
-							index: setIndex,
+						sets: ex.sets.map((set: any) => ({
 							type: set.type,
 							weight_kg: set.weightKg,
 							reps: set.reps,
@@ -525,7 +522,6 @@ export class MyMCP extends McpAgent {
 				title: z.string().describe("Title of the routine"),
 				notes: z.string().optional().nullable().describe("Notes for the routine"),
 				exercises: z.array(z.object({
-					title: z.string().describe("Exercise name (from exercise template)"),
 					exerciseTemplateId: z.string().describe("Exercise template ID"),
 					supersetId: z.number().optional().nullable().describe("Superset ID (null if not in a superset)"),
 					restSeconds: z.number().optional().nullable().describe("Rest time in seconds between sets"),
@@ -547,15 +543,13 @@ export class MyMCP extends McpAgent {
 			async (args) => {
 				try {
 					// Transform camelCase to snake_case for API
-					const exercises = args.exercises.map((ex: any, exerciseIndex: number) => ({
-						index: exerciseIndex,
-						title: ex.title,
+					// NOTE: Unlike workouts, routines don't use index fields in the request
+					const exercises = args.exercises.map((ex: any) => ({
 						exercise_template_id: ex.exerciseTemplateId,
 						superset_id: ex.supersetId,
 						rest_seconds: ex.restSeconds,
 						notes: ex.notes,
-						sets: ex.sets.map((set: any, setIndex: number) => ({
-							index: setIndex,
+						sets: ex.sets.map((set: any) => ({
 							type: set.type,
 							weight_kg: set.weightKg,
 							reps: set.reps,
@@ -967,10 +961,10 @@ export default {
 
 		// Health check endpoint
 		if (url.pathname === "/health") {
-			return new Response(JSON.stringify({ 
-				status: "healthy", 
+			return new Response(JSON.stringify({
+				status: "healthy",
 				transport: "streamable-http",
-				version: "2.1.1"
+				version: "2.1.2"
 			}), {
 				headers: { "Content-Type": "application/json" }
 			});

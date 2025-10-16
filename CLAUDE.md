@@ -52,7 +52,7 @@ Get a single routine by ID with full exercise details.
 #### `create_routine`
 Create a new workout routine/program.
 - **Parameters:** `title`, `exercises` (array), `folderId`, `notes`
-- **Note:** Each exercise in the array requires a `title` field (exercise name from template). The `index` fields for exercises and sets are auto-generated.
+- **Note:** Exercise structure uses only `exerciseTemplateId` (no `title` or `index` fields needed). Sets also don't require `index` fields.
 
 ### Exercise Templates
 
@@ -398,11 +398,17 @@ Tom (tom@uclab.eu)
 
 ## Version
 
+2.1.2 - Bug Fix Release:
+- 🐛 Fixed routine creation issue: Removed incorrect `index` and `title` fields from routine exercises/sets
+- ✅ Routines now correctly use only `exercise_template_id` without `index` or `title` fields
+- 📝 Updated documentation to clarify different requirements for workouts vs routines
+- **Note:** Workouts require `index` and `title`, but routines do not
+
 2.1.1 - Bug Fix Release:
-- 🐛 Fixed missing `index` and `title` fields in create_workout, update_workout, create_routine, and update_routine
+- 🐛 Fixed missing `index` and `title` fields in create_workout and update_workout
 - ✅ Auto-generate `index` fields for exercises and sets based on array position
-- ✅ Added required `title` field to exercise schema (exercise name from template)
-- 📝 Updated documentation to reflect exercise structure requirements
+- ✅ Added required `title` field to workout exercise schema (exercise name from template)
+- 📝 Updated documentation to reflect workout exercise structure requirements
 
 2.1.0 - Streamable HTTP Migration:
 - ✅ Migrated from SSE to streamable-http transport (future-proof)
