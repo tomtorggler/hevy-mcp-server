@@ -843,7 +843,7 @@ export default {
 	<p>v3.0.0 - Multi-user OAuth support with encrypted API key storage</p>
 	
 	<h2>Documentation</h2>
-	<p>See <a href="https://github.com/yourusername/tto-hevy-mcp">GitHub repository</a> for setup instructions.</p>
+	<p>See <a href="https://github.com/tomtorggler/hevy-mcp-server">GitHub repository</a> for setup instructions.</p>
 </body>
 </html>`,
 				{

@@ -44,7 +44,7 @@ This MCP server provides comprehensive access to Hevy's fitness tracking capabil
 1. Clone this repository:
 ```bash
 git clone https://github.com/tomtorggler/hevy-mcp-server.git
-cd tto-hevy-mcp
+cd hevy-mcp-server
 ```
 
 2. Install dependencies:
@@ -214,7 +214,7 @@ All timestamps use ISO 8601 format:
 ### Project Structure
 
 ```
-tto-hevy-mcp/
+hevy-mcp-server/
 ├── src/
 │   ├── index.ts          # MCP server implementation with tool definitions
 │   └── lib/

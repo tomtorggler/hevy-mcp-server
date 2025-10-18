@@ -114,7 +114,7 @@ Create a new routine folder.
 ### Project Structure
 
 ```
-tto-hevy-mcp/
+hevy-mcp-server/
 ├── src/
 │   ├── index.ts          # MCP server implementation & tool registration
 │   └── lib/
