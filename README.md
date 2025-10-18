@@ -43,7 +43,7 @@ This MCP server provides comprehensive access to Hevy's fitness tracking capabil
 
 1. Clone this repository:
 ```bash
-git clone <your-repo-url>
+git clone https://github.com/tomtorggler/hevy-mcp-server.git
 cd tto-hevy-mcp
 ```
 
@@ -63,7 +63,7 @@ npx wrangler secret put HEVY_API_KEY
 npm run deploy
 ```
 
-Your MCP server will be available at: `https://tto-hevy-mcp.<your-account>.workers.dev/mcp`
+Your MCP server will be available at: `https://hevy-mcp-server.<your-account>.workers.dev/mcp`
 
 ### Local Development
 
@@ -87,7 +87,7 @@ To connect from Claude Desktop, edit your config file (Settings > Developer > Ed
       "command": "npx",
       "args": [
         "mcp-remote",
-        "https://tto-hevy-mcp.<your-account>.workers.dev/mcp"
+        "https://hevy-mcp-server.<your-account>.workers.dev/mcp"
       ]
     }
   }
@@ -261,10 +261,49 @@ this.server.tool(
 );
 ```
 
-## 📝 License
-
-[Your license here]
-
 ## 🤝 Contributing
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+Contributions are welcome!
+
+### How to Contribute
+
+1. **Fork the repository** and create your branch from `main`
+2. **Make your changes** - add features, fix bugs, or improve documentation
+3. **Test your changes** - run `npm test` and `npm run type-check`
+4. **Follow the code style** - run `npm run format` and `npm run lint:fix`
+5. **Submit a Pull Request** with a clear description of your changes
+
+### Development Setup
+
+```bash
+# Clone your fork
+git clone https://github.com/tomtorggler/hevy-mcp-server.git
+cd hevy-mcp-server
+
+# Install dependencies
+npm install
+
+# Copy environment variables template
+cp .dev.vars.example .dev.vars
+# Add your Hevy API key to .dev.vars
+
+# Start development server
+npm start
+
+# Run tests
+npm test
+```
+
+### Areas for Contribution
+
+- Add more Hevy API endpoints
+- Improve error handling and validation
+- Add more comprehensive tests
+- Improve documentation and examples
+- Report bugs or suggest features via Issues
+
+## 📝 License
+
+MIT License - see [LICENSE](LICENSE) file for details.
+
+This project is not affiliated with Hevy. Hevy is a trademark of Hevy Studios Inc.

@@ -24,21 +24,58 @@ import {
 	PAGINATION_LIMITS,
 } from "./lib/transforms.js";
 import { handleError } from "./lib/errors.js";
+import type { Props } from "./utils.js";
+import githubHandler from "./github-handler.js";
+import { getUserApiKey } from "./lib/key-storage.js";
 
-// Define our MCP agent with Hevy API tools
-export class MyMCP extends McpAgent {
+// Environment interface for OAuth multi-user support
+interface Env {
+	MCP_OBJECT: DurableObjectNamespace;
+	OAUTH_KV: KVNamespace;
+	GITHUB_CLIENT_ID: string;
+	GITHUB_CLIENT_SECRET: string;
+	COOKIE_ENCRYPTION_KEY: string;
+	// Legacy: HEVY_API_KEY is deprecated in favor of per-user keys in KV
+	HEVY_API_KEY?: string;
+}
+
+// Define our MCP agent with Hevy API tools and OAuth support
+export class MyMCP extends McpAgent<Env, Record<string, never>, Props> {
 	server = new McpServer({
 		name: "Hevy API",
-		version: "2.1.2",
-		description: "Remote MCP server for Hevy fitness tracking API with streamable-http transport",
+		version: "3.0.0",
+		description: "Multi-user remote MCP server for Hevy fitness tracking API with OAuth authentication",
 	});
 
 	private client!: HevyClient;
 
 	async init() {
-		// Initialize Hevy API client with environment API key
+		// Check if user is authenticated
+		if (!this.props || !this.props.login) {
+			throw new Error(
+				"Authentication required. Please authenticate via OAuth to use the Hevy MCP server."
+			);
+		}
+
+		// Load user's Hevy API key from encrypted KV storage
+		const hevyApiKey = await getUserApiKey(
+			this.env.OAUTH_KV,
+			this.env.COOKIE_ENCRYPTION_KEY,
+			this.props.login
+		);
+
+		if (!hevyApiKey) {
+			// Note: Replace with your deployed worker URL
+			const setupUrl = `https://${env.WORKER_URL || 'hevy-mcp-server.<your-account>.workers.dev'}/setup`;
+			throw new Error(
+				`Hevy API key not configured for user ${this.props.login}. ` +
+					`Please visit ${setupUrl} to configure your API key.`
+			);
+		}
+
+		// Initialize Hevy API client with user-specific API key
 		this.client = new HevyClient({
-			apiKey: (this.env as any).HEVY_API_KEY,
+			apiKey: hevyApiKey,
 		});
 
 		// ============================================
@@ -627,29 +664,192 @@ export class MyMCP extends McpAgent {
 	}
 }
 
+/**
+ * Helper function to extract user Props from Bearer token
+ *
+ * This function validates the OAuth Bearer token and retrieves the associated
+ * user session data from KV storage. The Props are then passed to the Durable Object
+ * through ExecutionContext (ctx.props), which the agents library uses to:
+ * 1. Create a user-specific DO instance (via namespace.idFromName)
+ * 2. Call updateProps() on the DO to store the props
+ * 3. Make props available to MyMCP.init() via this.props
+ */
+async function getUserPropsFromToken(env: Env, request: Request): Promise<Props | null> {
+	const authHeader = request.headers.get("Authorization");
+	if (!authHeader || !authHeader.startsWith("Bearer ")) {
+		return null;
+	}
+
+	const token = authHeader.substring(7); // Remove "Bearer " prefix
+	const sessionData = await env.OAUTH_KV.get(`session:${token}`, "json");
+
+	if (!sessionData || typeof sessionData !== "object") {
+		return null;
+	}
+
+	return sessionData as Props;
+}
+
+/**
+ * Create MCP handlers with OAuth authentication
+ *
+ * HOW PROPS FLOW TO DURABLE OBJECTS:
+ * 1. Client sends request with Authorization: Bearer <token>
+ * 2. We validate token and get Props from KV (getUserPropsFromToken)
+ * 3. We set ctx.props = props
+ * 4. We call mcpHandlers.*.fetch(request, env, ctx)
+ * 5. The agents library's serve() handler:
+ *    - Reads ctx.props
+ *    - Gets/creates DO with getAgentByName(namespace, id, { props: ctx.props })
+ *    - Calls agent.updateProps(ctx.props) on the DO
+ *    - Stores props in DO storage
+ * 6. MyMCP.init() can now access this.props.login
+ */
+const mcpHandlers = {
+	streamableHTTP: MyMCP.serve("/mcp", { binding: "MCP_OBJECT" }),
+	sse: MyMCP.serveSSE("/sse", { binding: "MCP_OBJECT" }),
+};
+
 export default {
-	fetch(request: Request, env: Env, ctx: ExecutionContext) {
+	async fetch(request: Request, env: Env, ctx: ExecutionContext) {
 		const url = new URL(request.url);
 
-		// Streamable HTTP transport (primary endpoint)
-		if (url.pathname === "/mcp") {
-			return MyMCP.serve("/mcp").fetch(request, env, ctx);
+		// OAuth routes and API key management (handled by github-handler)
+		if (
+			url.pathname === "/authorize" ||
+			url.pathname === "/callback" ||
+			url.pathname === "/token" ||
+			url.pathname === "/register" ||
+			url.pathname === "/logout" ||
+			url.pathname === "/setup" ||
+			url.pathname === "/.well-known/oauth-authorization-server" ||
+			url.pathname.startsWith("/api/")
+		) {
+			return githubHandler.fetch(request, env, ctx);
+		}
+
+		// MCP endpoints - require authentication via Bearer token
+		if (url.pathname === "/mcp" || url.pathname.startsWith("/mcp/")) {
+			const props = await getUserPropsFromToken(env, request);
+			if (!props) {
+				return new Response(
+					JSON.stringify({
+						error: "unauthorized",
+						message: "Authentication required. Please provide a valid Bearer token.",
+					}),
+					{
+						status: 401,
+						headers: { "Content-Type": "application/json" },
+					}
+				);
+			}
+
+			// Pass props through ExecutionContext so the agents library can access them
+			// The agents library's serve() handler will read ctx.props and pass it to the DO
+			(ctx as any).props = props;
+
+			// Forward request to MCP handler (which will create/get the DO with props)
+			return mcpHandlers.streamableHTTP.fetch(request, env, ctx);
 		}
 
 		// Legacy SSE endpoint for backward compatibility
 		if (url.pathname === "/sse" || url.pathname === "/sse/message") {
-			return MyMCP.serveSSE("/sse").fetch(request, env, ctx);
+			const props = await getUserPropsFromToken(env, request);
+			if (!props) {
+				return new Response(
+					JSON.stringify({
+						error: "unauthorized",
+						message: "Authentication required. Please provide a valid Bearer token.",
+					}),
+					{
+						status: 401,
+						headers: { "Content-Type": "application/json" },
+					}
+				);
+			}
+
+			// Pass props through ExecutionContext
+			(ctx as any).props = props;
+
+			// Forward request to SSE handler
+			return mcpHandlers.sse.fetch(request, env, ctx);
 		}
 
 		// Health check endpoint
 		if (url.pathname === "/health") {
-			return new Response(JSON.stringify({
-				status: "healthy",
-				transport: "streamable-http",
-				version: "2.1.2"
-			}), {
-				headers: { "Content-Type": "application/json" }
-			});
+			return new Response(
+				JSON.stringify({
+					status: "healthy",
+					transport: "streamable-http",
+					version: "3.0.0",
+					oauth: "enabled",
+				}),
+				{
+					headers: { "Content-Type": "application/json" },
+				}
+			);
+		}
+
+		// Root endpoint - show OAuth info
+		if (url.pathname === "/") {
+			return new Response(
+				`<!DOCTYPE html>
+<html>
+<head>
+	<title>Hevy MCP Server</title>
+	<style>
+		body {
+			font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+			max-width: 800px;
+			margin: 50px auto;
+			padding: 20px;
+			line-height: 1.6;
+		}
+		h1 { color: #667eea; }
+		.endpoint { 
+			background: #f5f5f5; 
+			padding: 10px; 
+			margin: 10px 0; 
+			border-radius: 4px;
+			font-family: monospace;
+		}
+		.status {
+			display: inline-block;
+			background: #10b981;
+			color: white;
+			padding: 4px 12px;
+			border-radius: 12px;
+			font-size: 12px;
+			font-weight: 600;
+		}
+	</style>
+</head>
+<body>
+	<h1>🏋️ Hevy MCP Server</h1>
+	<p><span class="status">ONLINE</span> Multi-user OAuth enabled</p>
+	
+	<h2>Setup & Authentication</h2>
+	<div class="endpoint">GET /setup - Configure your Hevy API key</div>
+	<div class="endpoint">GET /authorize - Start OAuth flow</div>
+	<div class="endpoint">POST /token - Exchange code for token</div>
+	<div class="endpoint">POST /register - Register OAuth client</div>
+	<div class="endpoint">GET /logout - Clear session</div>
+
+	<h2>MCP Endpoints</h2>
+	<div class="endpoint">GET /mcp - Streamable HTTP transport (requires Bearer token)</div>
+	<div class="endpoint">GET /sse - Legacy SSE transport (requires Bearer token)</div>
+
+	<h2>Version</h2>
+	<p>v3.0.0 - Multi-user OAuth support with encrypted API key storage</p>
+	
+	<h2>Documentation</h2>
+	<p>See <a href="https://github.com/yourusername/tto-hevy-mcp">GitHub repository</a> for setup instructions.</p>
+</body>
+</html>`,
+				{
+					headers: { "Content-Type": "text/html" },
+				}
+			);
 		}
 
 		return new Response("Not found", { status: 404 });

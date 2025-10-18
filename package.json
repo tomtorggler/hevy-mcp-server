@@ -1,7 +1,16 @@
 {
 	"name": "hevy-mcp-server",
-	"version": "0.0.0",
-	"private": true,
+	"version": "2.2.0",
+	"description": "A Model Context Protocol (MCP) server for the Hevy fitness tracking API, deployed on Cloudflare Workers",
+	"keywords": ["mcp", "model-context-protocol", "hevy", "fitness", "cloudflare-workers", "ai", "claude"],
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/tomtorggler/hevy-mcp-server.git"
+	},
+	"bugs": {
+		"url": "https://github.com/tomtorggler/hevy-mcp-server/issues"
+	},
+	"homepage": "https://github.com/tomtorggler/hevy-mcp-server#readme",
 	"scripts": {
 		"deploy": "wrangler deploy",
 		"dev": "wrangler dev",
@@ -17,8 +26,11 @@
 		"test:run": "vitest run"
 	},
 	"dependencies": {
+		"@cloudflare/workers-oauth-provider": "^0.0.11",
 		"@modelcontextprotocol/sdk": "1.20.0",
 		"agents": "^0.2.8",
+		"hono": "^4.10.1",
+		"octokit": "^5.0.4",
 		"zod": "^3.25.76"
 	},
 	"devDependencies": {

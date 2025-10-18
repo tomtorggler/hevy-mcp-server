@@ -35,7 +35,18 @@
 	},
 	"observability": {
 		"enabled": true
-	}
+	},
+	/**
+	 * KV Namespaces
+	 * Stores encrypted user API keys for multi-user OAuth support
+	 */
+	"kv_namespaces": [
+		{
+			"binding": "OAUTH_KV",
+			"id": "c449b150e27b4ed6a7f958e81495da16",
+			"preview_id": "b58f63e9889b4f87b6ad153501e1e165"
+		}
+	]
 	/**
 	 * Smart Placement
 	 * Docs: https://developers.cloudflare.com/workers/configuration/smart-placement/#smart-placement

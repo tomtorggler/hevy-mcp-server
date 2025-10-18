@@ -1,0 +1,21 @@
+# Local development environment variables for OAuth multi-user support
+# Copy this file to .dev.vars and fill in your actual values
+
+# GitHub OAuth App Credentials (Development)
+# Create a GitHub OAuth App at: https://github.com/settings/developers
+# Configuration:
+#   - Application name: "Hevy MCP Server (Dev)"
+#   - Homepage URL: http://localhost:8787
+#   - Authorization callback URL: http://localhost:8787/callback
+GITHUB_CLIENT_ID=your_dev_client_id_here
+GITHUB_CLIENT_SECRET=your_dev_client_secret_here
+
+# Cookie Encryption Key
+# Generate a secure random key with: openssl rand -hex 32
+# This key is used to encrypt OAuth session cookies
+COOKIE_ENCRYPTION_KEY=your_encryption_key_here
+
+# Note: Individual user Hevy API keys are now stored encrypted in KV
+# Users configure their keys via the /setup web interface after OAuth authentication
+# The old single-user HEVY_API_KEY environment variable is no longer used
+

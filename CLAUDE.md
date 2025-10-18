@@ -6,7 +6,7 @@ A remote Model Context Protocol (MCP) server for the Hevy fitness tracking API, 
 
 This project provides a remote MCP server that exposes Hevy API functionality as MCP tools. It allows AI assistants like Claude to interact with your Hevy workout data without authentication complexity.
 
-**Live URL:** https://hevy-mcp-server.tom-7bc.workers.dev/mcp
+**Live URL:** `https://hevy-mcp-server.<your-account>.workers.dev/mcp` (after deployment)
 
 ## Features
 
@@ -18,7 +18,7 @@ This project provides a remote MCP server that exposes Hevy API functionality as
 
 ## Available Tools
 
-The server now provides comprehensive access to the Hevy API with the following tools:
+The server provides comprehensive access to the Hevy API with 17 tools:
 
 ### Workouts
 
@@ -35,9 +35,17 @@ Log a new workout with exercises and sets.
 - **Parameters:** `title`, `start_time`, `end_time`, `exercises` (array), `description`, `is_private`
 - **Note:** Each exercise requires a `title` field (for display/reference only - not sent to API) and `exercise_template_id`. Order is determined by array position.
 
+#### `update_workout`
+Update an existing workout.
+- **Parameters:** `workout_id` (string), workout data (same as create_workout)
+
 #### `get_workouts_count`
 Get the total number of workouts in your account.
 - **Parameters:** None
+
+#### `get_workout_events`
+Get workout change events (updates/deletes) since a date for syncing.
+- **Parameters:** `since` (ISO 8601 date string)
 
 ### Routines
 
@@ -54,11 +62,23 @@ Create a new workout routine/program.
 - **Parameters:** `title`, `exercises` (array), `folder_id`, `notes`
 - **Note:** Exercise structure uses only `exercise_template_id` (no `title` or `index` fields needed). Sets also don't require `index` fields.
 
+#### `update_routine`
+Update an existing routine.
+- **Parameters:** `routine_id` (string), routine data (same as create_routine)
+
 ### Exercise Templates
 
 #### `get_exercise_templates`
 Get available exercise templates (both built-in and custom).
 - **Parameters:** `page` (default: 1), `page_size` (default: 20, max: 100)
+
+#### `get_exercise_template`
+Get detailed information about a specific exercise template.
+- **Parameters:** `exercise_template_id` (string)
+
+#### `create_exercise_template`
+Create a custom exercise template.
+- **Parameters:** `title`, `equipment_category`, `primary_muscle_group`, `secondary_muscle_groups`, `is_unilateral`
 
 #### `get_exercise_history`
 Get exercise history for tracking progress over time.
@@ -69,6 +89,14 @@ Get exercise history for tracking progress over time.
 #### `get_routine_folders`
 Get routine organization folders.
 - **Parameters:** `page` (default: 1), `page_size` (default: 10, max: 10)
+
+#### `get_routine_folder`
+Get details of a specific routine folder.
+- **Parameters:** `routine_folder_id` (string)
+
+#### `create_routine_folder`
+Create a new routine folder.
+- **Parameters:** `title`
 
 ## Configuration
 
@@ -168,7 +196,7 @@ echo "your-api-key" | npx wrangler secret put HEVY_API_KEY
 npm run deploy
 ```
 
-Your server will be live at: `https://hevy-mcp-server.tom-7bc.workers.dev/mcp`
+Your server will be live at: `https://hevy-mcp-server.<your-account>.workers.dev/mcp`
 
 ### Verify Deployment
 
@@ -192,7 +220,7 @@ Add to your config:
   "mcpServers": {
     "hevy": {
       "command": "npx",
-      "args": ["mcp-remote", "https://hevy-mcp-server.tom-7bc.workers.dev/mcp"]
+      "args": ["mcp-remote", "https://hevy-mcp-server.<your-account>.workers.dev/mcp"]
     }
   }
 }
@@ -201,14 +229,14 @@ Add to your config:
 ### Cloudflare AI Playground
 
 1. Go to https://playground.ai.cloudflare.com/
-2. Enter URL: `https://hevy-mcp-server.tom-7bc.workers.dev/mcp`
+2. Enter URL: `https://hevy-mcp-server.<your-account>.workers.dev/mcp`
 3. Start using the tools
 
 ### Other MCP Clients
 
 Use the `mcp-remote` adapter:
 ```bash
-npx mcp-remote https://hevy-mcp-server.tom-7bc.workers.dev/mcp
+npx mcp-remote https://hevy-mcp-server.<your-account>.workers.dev/mcp
 ```
 
 ## API Reference
@@ -218,14 +246,17 @@ This server implements the Hevy API v1. Full API documentation available in `api
 **Base API URL:** https://api.hevyapp.com/v1
 
 **Implemented Endpoints:**
-- ✅ `/v1/workouts` - Get/create workouts
-- ✅ `/v1/workouts/{id}` - Get specific workout
+- ✅ `/v1/workouts` - Get/create/update workouts
+- ✅ `/v1/workouts/{id}` - Get/update specific workout
 - ✅ `/v1/workouts/count` - Get total workout count
-- ✅ `/v1/routines` - Get/create routines
-- ✅ `/v1/routines/{id}` - Get specific routine
-- ✅ `/v1/exercise_templates` - Get exercise templates
+- ✅ `/v1/workout_events` - Get workout change events
+- ✅ `/v1/routines` - Get/create/update routines
+- ✅ `/v1/routines/{id}` - Get/update specific routine
+- ✅ `/v1/exercise_templates` - Get/create exercise templates
+- ✅ `/v1/exercise_templates/{id}` - Get specific exercise template
 - ✅ `/v1/exercise_history/{id}` - Get exercise history
-- ✅ `/v1/routine_folders` - Get routine folders
+- ✅ `/v1/routine_folders` - Get/create routine folders
+- ✅ `/v1/routine_folders/{id}` - Get specific routine folder
 
 ## Tech Stack
 
@@ -319,7 +350,7 @@ This server has been migrated from Server-Sent Events (SSE) to streamable-http t
 ### For Existing Users
 
 1. **Update your MCP client configuration**:
-   - Change URL from `https://hevy-mcp-server.tom-7bc.workers.dev/sse` to `https://hevy-mcp-server.tom-7bc.workers.dev/mcp`
+   - Change URL from `https://hevy-mcp-server.<your-account>.workers.dev/sse` to `https://hevy-mcp-server.<your-account>.workers.dev/mcp`
    - Add `Accept: application/json, text/event-stream` header if needed
 
 2. **Legacy SSE endpoint**:
@@ -355,16 +386,16 @@ echo "your-api-key" | npx wrangler secret put HEVY_API_KEY
 
 Verify server is running:
 - Local: http://localhost:8787/mcp (streamable-http)
-- Production: https://hevy-mcp-server.tom-7bc.workers.dev/mcp
-- Health check: https://hevy-mcp-server.tom-7bc.workers.dev/health
+- Production: https://hevy-mcp-server.<your-account>.workers.dev/mcp
+- Health check: https://hevy-mcp-server.<your-account>.workers.dev/health
 
 Test with curl:
 ```bash
 # Test health endpoint
-curl https://hevy-mcp-server.tom-7bc.workers.dev/health
+curl https://hevy-mcp-server.<your-account>.workers.dev/health
 
 # Test MCP initialization
-curl -X POST https://hevy-mcp-server.tom-7bc.workers.dev/mcp \
+curl -X POST https://hevy-mcp-server.<your-account>.workers.dev/mcp \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
   -d '{"jsonrpc":"2.0","method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0.0"}},"id":1}'
@@ -390,37 +421,38 @@ https://dash.cloudflare.com/
 
 ## License
 
-This project is for personal use with the Hevy API.
+MIT License - see [LICENSE](LICENSE) file for details.
+
+This project is not affiliated with Hevy. Hevy is a trademark of Hevy Studios Inc.
 
 ## Maintainer
 
-Tom (tom@uclab.eu)
+Tom Olausson
 
 ## Version
+
+2.2.0 - Current Release (Expanded API Coverage):
+- ✅ **17 total tools** - Full CRUD operations across all Hevy API endpoints
+- ✅ **Workouts:** get, get by ID, create, update, count, get events (sync support)
+- ✅ **Routines:** get, get by ID, create, update
+- ✅ **Exercise Templates:** get, get by ID, create, get history
+- ✅ **Routine Folders:** get, get by ID, create
+- ✅ **Data Cleaning:** Automatic removal of empty notes and extra fields from API responses
+- ✅ **Comprehensive Testing:** Vitest integration with schema transformation tests
+- 📝 Updated documentation to reflect complete API coverage
 
 2.1.2 - Bug Fix Release:
 - 🐛 Fixed routine creation issue: Removed incorrect `index` and `title` fields from routine exercises/sets
 - ✅ Routines now correctly use only `exercise_template_id` without `index` or `title` fields
 - 📝 Updated documentation to clarify different requirements for workouts vs routines
-- **Note:** Workouts require `index` and `title`, but routines do not
 
 2.1.1 - Bug Fix Release:
 - 🐛 Fixed missing `index` and `title` fields in create_workout and update_workout
 - ✅ Auto-generate `index` fields for exercises and sets based on array position
 - ✅ Added required `title` field to workout exercise schema (exercise name from template)
-- 📝 Updated documentation to reflect workout exercise structure requirements
 
 2.1.0 - Streamable HTTP Migration:
 - ✅ Migrated from SSE to streamable-http transport (future-proof)
 - ✅ Updated to @modelcontextprotocol/sdk@1.20.0
 - ✅ Maintained backward compatibility with legacy SSE endpoint
 - ✅ Added health check endpoint for monitoring
-- ✅ Improved error handling and session management
-
-2.0.0 - Expanded release with comprehensive Hevy API coverage:
-- ✅ 10 total tools covering all major Hevy API endpoints
-- ✅ Workouts: get, get by ID, create, count
-- ✅ Routines: get, get by ID, create
-- ✅ Exercise templates and history
-- ✅ Routine folders
-- ✅ Clean HevyClient abstraction for maintainability

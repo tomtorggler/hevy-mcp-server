@@ -112,7 +112,7 @@ export function formatHevyApiError(error: HevyApiError): McpToolResponse {
 			break;
 
 		case 401:
-			parts.push("  - Verify your HEVY_API_KEY is set correctly");
+			parts.push("  - Verify your Hevy API key is configured at /setup");
 			parts.push("  - Check that your API key is still valid");
 			parts.push("  - Generate a new API key from Hevy if needed");
 			break;
