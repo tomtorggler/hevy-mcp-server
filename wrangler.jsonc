@@ -46,6 +46,12 @@
 			"id": "c449b150e27b4ed6a7f958e81495da16",
 			"preview_id": "b58f63e9889b4f87b6ad153501e1e165"
 		}
+	],
+	"routes": [
+		{
+			"pattern": "hevy.tomt.it",
+			"custom_domain": true
+		}
 	]
 	/**
 	 * Smart Placement

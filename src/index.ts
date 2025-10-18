@@ -794,56 +794,261 @@ export default {
 		if (url.pathname === "/") {
 			return new Response(
 				`<!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
 	<title>Hevy MCP Server</title>
 	<style>
+		* {
+			margin: 0;
+			padding: 0;
+			box-sizing: border-box;
+		}
+		
 		body {
-			font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-			max-width: 800px;
-			margin: 50px auto;
-			padding: 20px;
+			font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
 			line-height: 1.6;
+			color: #333;
+			min-height: 100vh;
+			padding: 2rem;
 		}
-		h1 { color: #667eea; }
-		.endpoint { 
-			background: #f5f5f5; 
-			padding: 10px; 
-			margin: 10px 0; 
-			border-radius: 4px;
-			font-family: monospace;
+		
+		.container {
+			max-width: 900px;
+			margin: 0 auto;
+			background: white;
+			border-radius: 16px;
+			box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+			overflow: hidden;
 		}
+		
+		.header {
+			background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+			color: white;
+			padding: 3rem 2rem;
+			text-align: center;
+		}
+		
+		.header h1 {
+			font-size: 2.5rem;
+			margin-bottom: 0.5rem;
+			font-weight: 700;
+		}
+		
 		.status {
 			display: inline-block;
 			background: #10b981;
 			color: white;
-			padding: 4px 12px;
-			border-radius: 12px;
-			font-size: 12px;
+			padding: 0.4rem 1rem;
+			border-radius: 20px;
+			font-size: 0.9rem;
 			font-weight: 600;
+			margin-top: 0.5rem;
+		}
+		
+		.setup-section {
+			padding: 3rem 2rem;
+			text-align: center;
+			background: #f8fafc;
+			border-bottom: 1px solid #e2e8f0;
+		}
+		
+		.setup-section h2 {
+			font-size: 1.5rem;
+			color: #1e293b;
+			margin-bottom: 1rem;
+		}
+		
+		.setup-section p {
+			color: #64748b;
+			margin-bottom: 2rem;
+			font-size: 1.1rem;
+		}
+		
+		.setup-button {
+			display: inline-block;
+			background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+			color: white;
+			padding: 1rem 3rem;
+			border-radius: 8px;
+			text-decoration: none;
+			font-weight: 600;
+			font-size: 1.1rem;
+			transition: all 0.3s ease;
+			box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);
+		}
+		
+		.setup-button:hover {
+			transform: translateY(-2px);
+			box-shadow: 0 6px 20px rgba(102, 126, 234, 0.6);
+		}
+		
+		.content {
+			padding: 2rem;
+		}
+		
+		.section {
+			margin-bottom: 2.5rem;
+		}
+		
+		.section h2 {
+			color: #1e293b;
+			font-size: 1.5rem;
+			margin-bottom: 1rem;
+			padding-bottom: 0.5rem;
+			border-bottom: 2px solid #e2e8f0;
+		}
+		
+		.endpoint {
+			background: #f8fafc;
+			padding: 0.75rem 1rem;
+			margin: 0.5rem 0;
+			border-radius: 6px;
+			border-left: 4px solid #667eea;
+			font-family: 'Monaco', 'Courier New', monospace;
+			font-size: 0.95rem;
+		}
+		
+		.version {
+			color: #64748b;
+			font-size: 0.95rem;
+		}
+		
+		.docs-section {
+			background: linear-gradient(135deg, #f8fafc 0%, #e0e7ff 100%);
+			padding: 2rem;
+			border-radius: 8px;
+			text-align: center;
+		}
+		
+		.docs-section h2 {
+			color: #1e293b;
+			font-size: 1.5rem;
+			margin-bottom: 1rem;
+			border: none;
+		}
+		
+		.docs-section p {
+			color: #475569;
+			font-size: 1.05rem;
+		}
+		
+		.docs-section a {
+			color: #667eea;
+			text-decoration: none;
+			font-weight: 600;
+			border-bottom: 2px solid transparent;
+			transition: border-color 0.3s ease;
+		}
+		
+		.docs-section a:hover {
+			border-bottom-color: #667eea;
+		}
+		
+		@media (max-width: 768px) {
+			body {
+				padding: 0;
+			}
+			
+			.container {
+				border-radius: 0;
+				box-shadow: none;
+			}
+			
+			.header {
+				padding: 2rem 1.5rem;
+			}
+			
+			.header h1 {
+				font-size: 2rem;
+			}
+			
+			.setup-section {
+				padding: 2rem 1.5rem;
+			}
+			
+			.setup-section h2 {
+				font-size: 1.3rem;
+			}
+			
+			.setup-section p {
+				font-size: 1rem;
+			}
+			
+			.setup-button {
+				padding: 0.875rem 2rem;
+				font-size: 1rem;
+			}
+			
+			.content {
+				padding: 1.5rem;
+			}
+			
+			.section h2 {
+				font-size: 1.3rem;
+			}
+			
+			.endpoint {
+				font-size: 0.85rem;
+				padding: 0.65rem 0.875rem;
+			}
+			
+			.docs-section {
+				padding: 1.5rem;
+			}
+			
+			.docs-section h2 {
+				font-size: 1.3rem;
+			}
+			
+			.docs-section p {
+				font-size: 0.95rem;
+			}
 		}
 	</style>
 </head>
 <body>
-	<h1>🏋️ Hevy MCP Server</h1>
-	<p><span class="status">ONLINE</span> Multi-user OAuth enabled</p>
-	
-	<h2>Setup & Authentication</h2>
-	<div class="endpoint">GET /setup - Configure your Hevy API key</div>
-	<div class="endpoint">GET /authorize - Start OAuth flow</div>
-	<div class="endpoint">POST /token - Exchange code for token</div>
-	<div class="endpoint">POST /register - Register OAuth client</div>
-	<div class="endpoint">GET /logout - Clear session</div>
+	<div class="container">
+		<div class="header">
+			<h1>Hevy MCP Server</h1>
+			<span class="status">● ONLINE</span>
+			<p style="margin-top: 1rem; opacity: 0.9;">Multi-user OAuth enabled</p>
+		</div>
+		
+		<div class="setup-section">
+			<h2>Get Started</h2>
+			<p>Configure your Hevy API key to begin using the MCP server</p>
+			<a href="/setup" class="setup-button">Setup</a>
+		</div>
+		
+		<div class="content">
+			<div class="section">
+				<h2>Authentication Endpoints</h2>
+				<div class="endpoint">GET /setup - Configure your Hevy API key</div>
+				<div class="endpoint">GET /authorize - Start OAuth flow</div>
+				<div class="endpoint">POST /token - Exchange code for token</div>
+				<div class="endpoint">POST /register - Register OAuth client</div>
+				<div class="endpoint">GET /logout - Clear session</div>
+			</div>
 
-	<h2>MCP Endpoints</h2>
-	<div class="endpoint">GET /mcp - Streamable HTTP transport (requires Bearer token)</div>
-	<div class="endpoint">GET /sse - Legacy SSE transport (requires Bearer token)</div>
+			<div class="section">
+				<h2>MCP Endpoints</h2>
+				<div class="endpoint">GET /mcp - Streamable HTTP transport (requires Bearer token)</div>
+				<div class="endpoint">GET /sse - Legacy SSE transport (requires Bearer token)</div>
+			</div>
 
-	<h2>Version</h2>
-	<p>v3.0.0 - Multi-user OAuth support with encrypted API key storage</p>
-	
-	<h2>Documentation</h2>
-	<p>See <a href="https://github.com/tomtorggler/hevy-mcp-server">GitHub repository</a> for setup instructions.</p>
+			<div class="section">
+				<h2>Version</h2>
+				<p class="version">v3.0.0 - Multi-user OAuth support with encrypted API key storage</p>
+			</div>
+			
+			<div class="docs-section">
+				<h2>📚 Documentation</h2>
+				<p>For complete setup instructions and detailed documentation, visit the <a href="https://github.com/tomtorggler/hevy-mcp-server" target="_blank">GitHub repository</a></p>
+			</div>
+		</div>
+	</div>
 </body>
 </html>`,
 				{
