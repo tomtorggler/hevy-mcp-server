@@ -24,16 +24,16 @@ The server now provides comprehensive access to the Hevy API with the following 
 
 #### `get_workouts`
 Get a paginated list of workouts with details.
-- **Parameters:** `page` (default: 1), `pageSize` (default: 10, max: 10)
+- **Parameters:** `page` (default: 1), `page_size` (default: 10, max: 10)
 
 #### `get_workout`
 Get a single workout by ID with full details.
-- **Parameters:** `workoutId` (string)
+- **Parameters:** `workout_id` (string)
 
 #### `create_workout`
 Log a new workout with exercises and sets.
-- **Parameters:** `title`, `startTime`, `endTime`, `exercises` (array), `description`, `isPrivate`
-- **Note:** Each exercise in the array requires a `title` field (exercise name from template). The `index` fields for exercises and sets are auto-generated.
+- **Parameters:** `title`, `start_time`, `end_time`, `exercises` (array), `description`, `is_private`
+- **Note:** Each exercise requires a `title` field (for display/reference only - not sent to API) and `exercise_template_id`. Order is determined by array position.
 
 #### `get_workouts_count`
 Get the total number of workouts in your account.
@@ -43,32 +43,32 @@ Get the total number of workouts in your account.
 
 #### `get_routines`
 Get a paginated list of workout routines.
-- **Parameters:** `page` (default: 1), `pageSize` (default: 5, max: 10)
+- **Parameters:** `page` (default: 1), `page_size` (default: 5, max: 10)
 
 #### `get_routine`
 Get a single routine by ID with full exercise details.
-- **Parameters:** `routineId` (string)
+- **Parameters:** `routine_id` (string)
 
 #### `create_routine`
 Create a new workout routine/program.
-- **Parameters:** `title`, `exercises` (array), `folderId`, `notes`
-- **Note:** Exercise structure uses only `exerciseTemplateId` (no `title` or `index` fields needed). Sets also don't require `index` fields.
+- **Parameters:** `title`, `exercises` (array), `folder_id`, `notes`
+- **Note:** Exercise structure uses only `exercise_template_id` (no `title` or `index` fields needed). Sets also don't require `index` fields.
 
 ### Exercise Templates
 
 #### `get_exercise_templates`
 Get available exercise templates (both built-in and custom).
-- **Parameters:** `page` (default: 1), `pageSize` (default: 20, max: 100)
+- **Parameters:** `page` (default: 1), `page_size` (default: 20, max: 100)
 
 #### `get_exercise_history`
 Get exercise history for tracking progress over time.
-- **Parameters:** `exerciseTemplateId` (string), `startDate`, `endDate`
+- **Parameters:** `exercise_template_id` (string), `start_date`, `end_date`
 
 ### Routine Folders
 
 #### `get_routine_folders`
 Get routine organization folders.
-- **Parameters:** `page` (default: 1), `pageSize` (default: 10, max: 10)
+- **Parameters:** `page` (default: 1), `page_size` (default: 10, max: 10)
 
 ## Configuration
 

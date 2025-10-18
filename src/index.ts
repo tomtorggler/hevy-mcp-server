@@ -2,6 +2,28 @@ import { McpAgent } from "agents/mcp";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { HevyClient } from "./lib/client.js";
+import {
+	CreateWorkoutSchema,
+	UpdateWorkoutSchema,
+	CreateRoutineSchema,
+	UpdateRoutineSchema,
+	CreateExerciseTemplateSchema,
+	CreateRoutineFolderSchema,
+	transformWorkoutToAPI,
+	transformRoutineToAPI,
+	transformExerciseTemplateToAPI,
+	transformRoutineFolderToAPI,
+} from "./lib/schemas.js";
+import {
+	ValidationError,
+	validatePagination,
+	validateISO8601Date,
+	validateWorkoutData,
+	validateRoutineData,
+	validateExerciseTemplate,
+	PAGINATION_LIMITS,
+} from "./lib/transforms.js";
+import { handleError } from "./lib/errors.js";
 
 // Define our MCP agent with Hevy API tools
 export class MyMCP extends McpAgent {
@@ -27,11 +49,14 @@ export class MyMCP extends McpAgent {
 			"get_workouts",
 			{
 				page: z.number().optional().describe("Page number (Must be 1 or greater)").default(1),
-				pageSize: z.number().optional().describe("Number of items per page (Max 10)").default(10),
+				page_size: z.number().optional().describe("Number of items per page (Max 10)").default(10),
 			},
-			async ({ page, pageSize }) => {
+			async ({ page, page_size }) => {
 				try {
-					const workouts = await this.client.getWorkouts({ page, pageSize });
+					// Validate pagination parameters
+					validatePagination(page, page_size, PAGINATION_LIMITS.WORKOUTS);
+
+					const workouts = await this.client.getWorkouts({ page, pageSize: page_size });
 
 					const workoutDetails = workouts.workouts?.map((workout: any, index: number) => {
 						return `Workout ${index + 1}: ${workout.title || 'Untitled'}\n  ID: ${workout.id}\n  Date: ${workout.start_time}`;
@@ -53,27 +78,20 @@ export class MyMCP extends McpAgent {
 							},
 						],
 					};
-				} catch (error) {
-					return {
-						content: [
-							{
-								type: "text",
-								text: `Error: ${error instanceof Error ? error.message : "Unknown error occurred"}`,
-							},
-						],
-					};
-				}
+			} catch (error) {
+				return handleError(error);
+			}
 			}
 		);
 
 		this.server.tool(
 			"get_workout",
 			{
-				workoutId: z.string().describe("The ID of the workout to retrieve"),
+				workout_id: z.string().describe("The ID of the workout to retrieve"),
 			},
-			async ({ workoutId }) => {
+			async ({ workout_id }) => {
 				try {
-					const workout = await this.client.getWorkout(workoutId);
+					const workout = await this.client.getWorkout(workout_id);
 
 					return {
 						content: [
@@ -87,76 +105,21 @@ export class MyMCP extends McpAgent {
 							},
 						],
 					};
-				} catch (error) {
-					return {
-						content: [
-							{
-								type: "text",
-								text: `Error: ${error instanceof Error ? error.message : "Unknown error occurred"}`,
-							},
-						],
-					};
-				}
+			} catch (error) {
+				return handleError(error);
+			}
 			}
 		);
 
 		this.server.tool(
 			"create_workout",
-			{
-				title: z.string().describe("Title of the workout"),
-				description: z.string().optional().nullable().describe("Workout description"),
-				startTime: z.string().describe("Start time (ISO 8601 format, e.g., 2024-01-15T10:00:00Z)"),
-				endTime: z.string().describe("End time (ISO 8601 format, e.g., 2024-01-15T11:30:00Z)"),
-				routineId: z.string().optional().nullable().describe("Optional routine ID that this workout belongs to"),
-				isPrivate: z.boolean().optional().describe("Whether the workout is private (default: false)"),
-				exercises: z.array(z.object({
-					title: z.string().describe("Exercise name (from exercise template)"),
-					exerciseTemplateId: z.string().describe("Exercise template ID"),
-					supersetId: z.number().optional().nullable().describe("Superset ID (null if not in a superset)"),
-					notes: z.string().optional().nullable().describe("Notes for this exercise"),
-					sets: z.array(z.object({
-						type: z.enum(["warmup", "normal", "failure", "dropset"]).optional().describe("Set type"),
-						weightKg: z.number().optional().nullable().describe("Weight in kilograms"),
-						reps: z.number().optional().nullable().describe("Number of repetitions"),
-						distanceMeters: z.number().optional().nullable().describe("Distance in meters"),
-						durationSeconds: z.number().optional().nullable().describe("Duration in seconds"),
-						customMetric: z.number().optional().nullable().describe("Custom metric (for steps/floors)"),
-						rpe: z.number().optional().nullable().describe("Rating of Perceived Exertion (6-10)")
-					})).describe("Sets performed in this exercise")
-				})).describe("Exercises in the workout")
-			},
+			CreateWorkoutSchema.shape,
 			async (args) => {
 				try {
-					// Transform camelCase to snake_case for API
-					const exercises = args.exercises.map((ex: any, exerciseIndex: number) => ({
-						index: exerciseIndex,
-						title: ex.title,
-						exercise_template_id: ex.exerciseTemplateId,
-						superset_id: ex.supersetId,
-						notes: ex.notes,
-						sets: ex.sets.map((set: any, setIndex: number) => ({
-							index: setIndex,
-							type: set.type,
-							weight_kg: set.weightKg,
-							reps: set.reps,
-							distance_meters: set.distanceMeters,
-							duration_seconds: set.durationSeconds,
-							custom_metric: set.customMetric,
-							rpe: set.rpe
-						}))
-					}));
-
-					const workout = await this.client.createWorkout({
-						workout: {
-							title: args.title,
-							description: args.description,
-							start_time: args.startTime,
-							end_time: args.endTime,
-							routine_id: args.routineId,
-							is_private: args.isPrivate,
-							exercises: exercises
-						}
-					});
+					// Validate workout data including dates, exercises, and RPE values
+					validateWorkoutData(args);
+					
+					const workout = await this.client.createWorkout(transformWorkoutToAPI(args));
 
 					return {
 						content: [
@@ -166,7 +129,7 @@ export class MyMCP extends McpAgent {
 							},
 							{
 								type: "text",
-								text: `Workout ID: ${workout.id}\nExercises: ${workout.exercises?.length || 0}\nStarted: ${args.startTime}`,
+								text: `Workout ID: ${workout.id}\nExercises: ${workout.exercises?.length || 0}\nStarted: ${args.start_time}`,
 							},
 							{
 								type: "text",
@@ -174,16 +137,9 @@ export class MyMCP extends McpAgent {
 							},
 						],
 					};
-				} catch (error) {
-					return {
-						content: [
-							{
-								type: "text",
-								text: `Error: ${error instanceof Error ? error.message : "Unknown error occurred"}`,
-							},
-						],
-					};
-				}
+			} catch (error) {
+				return handleError(error);
+			}
 			}
 		);
 
@@ -202,77 +158,26 @@ export class MyMCP extends McpAgent {
 							},
 						],
 					};
-				} catch (error) {
-					return {
-						content: [
-							{
-								type: "text",
-								text: `Error: ${error instanceof Error ? error.message : "Unknown error occurred"}`,
-							},
-						],
-					};
-				}
+			} catch (error) {
+				return handleError(error);
+			}
 			}
 		);
 
 		this.server.tool(
 			"update_workout",
 			{
-				workoutId: z.string().describe("The ID of the workout to update"),
-				title: z.string().describe("Title of the workout"),
-				description: z.string().optional().nullable().describe("Workout description"),
-				startTime: z.string().describe("Start time (ISO 8601 format, e.g., 2024-01-15T10:00:00Z)"),
-				endTime: z.string().describe("End time (ISO 8601 format, e.g., 2024-01-15T11:30:00Z)"),
-				routineId: z.string().optional().nullable().describe("Optional routine ID that this workout belongs to"),
-				isPrivate: z.boolean().optional().describe("Whether the workout is private (default: false)"),
-				exercises: z.array(z.object({
-					title: z.string().describe("Exercise name (from exercise template)"),
-					exerciseTemplateId: z.string().describe("Exercise template ID"),
-					supersetId: z.number().optional().nullable().describe("Superset ID (null if not in a superset)"),
-					notes: z.string().optional().nullable().describe("Notes for this exercise"),
-					sets: z.array(z.object({
-						type: z.enum(["warmup", "normal", "failure", "dropset"]).optional().describe("Set type"),
-						weightKg: z.number().optional().nullable().describe("Weight in kilograms"),
-						reps: z.number().optional().nullable().describe("Number of repetitions"),
-						distanceMeters: z.number().optional().nullable().describe("Distance in meters"),
-						durationSeconds: z.number().optional().nullable().describe("Duration in seconds"),
-						customMetric: z.number().optional().nullable().describe("Custom metric (for steps/floors)"),
-						rpe: z.number().optional().nullable().describe("Rating of Perceived Exertion (6-10)")
-					})).describe("Sets performed in this exercise")
-				})).describe("Exercises in the workout")
+				workout_id: z.string().describe("The ID of the workout to update"),
+				...UpdateWorkoutSchema.shape,
 			},
 			async (args) => {
 				try {
-					// Transform camelCase to snake_case for API
-					const exercises = args.exercises.map((ex: any, exerciseIndex: number) => ({
-						index: exerciseIndex,
-						title: ex.title,
-						exercise_template_id: ex.exerciseTemplateId,
-						superset_id: ex.supersetId,
-						notes: ex.notes,
-						sets: ex.sets.map((set: any, setIndex: number) => ({
-							index: setIndex,
-							type: set.type,
-							weight_kg: set.weightKg,
-							reps: set.reps,
-							distance_meters: set.distanceMeters,
-							duration_seconds: set.durationSeconds,
-							custom_metric: set.customMetric,
-							rpe: set.rpe
-						}))
-					}));
+					const { workout_id, ...workoutData } = args;
 
-					const workout = await this.client.updateWorkout(args.workoutId, {
-						workout: {
-							title: args.title,
-							description: args.description,
-							start_time: args.startTime,
-							end_time: args.endTime,
-							routine_id: args.routineId,
-							is_private: args.isPrivate,
-							exercises: exercises
-						}
-					});
+					// Validate workout data including dates, exercises, and RPE values
+					validateWorkoutData(workoutData);
+
+					const workout = await this.client.updateWorkout(workout_id, transformWorkoutToAPI(workoutData));
 
 					return {
 						content: [
@@ -286,16 +191,9 @@ export class MyMCP extends McpAgent {
 							},
 						],
 					};
-				} catch (error) {
-					return {
-						content: [
-							{
-								type: "text",
-								text: `Error: ${error instanceof Error ? error.message : "Unknown error occurred"}`,
-							},
-						],
-					};
-				}
+			} catch (error) {
+				return handleError(error);
+			}
 			}
 		);
 
@@ -303,12 +201,20 @@ export class MyMCP extends McpAgent {
 			"get_workout_events",
 			{
 				page: z.number().optional().describe("Page number (Must be 1 or greater)").default(1),
-				pageSize: z.number().optional().describe("Number of items per page (Max 10)").default(5),
+				page_size: z.number().optional().describe("Number of items per page (Max 10)").default(5),
 				since: z.string().optional().describe("Get events since this date (ISO 8601 format, e.g., 2024-01-01T00:00:00Z)"),
 			},
 			async (args) => {
 				try {
-					const params: any = { page: args.page, pageSize: args.pageSize };
+					// Validate pagination parameters
+					validatePagination(args.page, args.page_size, PAGINATION_LIMITS.WORKOUT_EVENTS);
+
+					// Validate date format if provided
+					if (args.since) {
+						validateISO8601Date(args.since, "since");
+					}
+
+					const params: any = { page: args.page, pageSize: args.page_size };
 					if (args.since) params.since = args.since;
 
 					const events = await this.client.getWorkoutEvents(params);
@@ -333,16 +239,9 @@ export class MyMCP extends McpAgent {
 							},
 						],
 					};
-				} catch (error) {
-					return {
-						content: [
-							{
-								type: "text",
-								text: `Error: ${error instanceof Error ? error.message : "Unknown error occurred"}`,
-							},
-						],
-					};
-				}
+			} catch (error) {
+				return handleError(error);
+			}
 			}
 		);
 
@@ -354,11 +253,14 @@ export class MyMCP extends McpAgent {
 			"get_routines",
 			{
 				page: z.number().optional().describe("Page number (Must be 1 or greater)").default(1),
-				pageSize: z.number().optional().describe("Number of items per page (Max 10)").default(5),
+				page_size: z.number().optional().describe("Number of items per page (Max 10)").default(5),
 			},
-			async ({ page, pageSize }) => {
+			async ({ page, page_size }) => {
 				try {
-					const routines = await this.client.getRoutines({ page, pageSize });
+					// Validate pagination parameters
+					validatePagination(page, page_size, PAGINATION_LIMITS.ROUTINES);
+
+					const routines = await this.client.getRoutines({ page, pageSize: page_size });
 
 					const routineDetails = routines.routines?.map((routine: any, index: number) => {
 						const exerciseCount = routine.exercises?.length || 0;
@@ -381,27 +283,20 @@ export class MyMCP extends McpAgent {
 							},
 						],
 					};
-				} catch (error) {
-					return {
-						content: [
-							{
-								type: "text",
-								text: `Error: ${error instanceof Error ? error.message : "Unknown error occurred"}`,
-							},
-						],
-					};
-				}
+			} catch (error) {
+				return handleError(error);
+			}
 			}
 		);
 
 		this.server.tool(
 			"get_routine",
 			{
-				routineId: z.string().describe("The ID of the routine to retrieve"),
+				routine_id: z.string().describe("The ID of the routine to retrieve"),
 			},
-			async ({ routineId }) => {
+			async ({ routine_id }) => {
 				try {
-					const result = await this.client.getRoutine(routineId);
+					const result = await this.client.getRoutine(routine_id);
 					const routine = result.routine;
 
 					return {
@@ -416,75 +311,21 @@ export class MyMCP extends McpAgent {
 							},
 						],
 					};
-				} catch (error) {
-					return {
-						content: [
-							{
-								type: "text",
-								text: `Error: ${error instanceof Error ? error.message : "Unknown error occurred"}`,
-							},
-						],
-					};
-				}
+			} catch (error) {
+				return handleError(error);
+			}
 			}
 		);
 
 		this.server.tool(
 			"create_routine",
-			{
-				title: z.string().describe("Title of the routine"),
-				folderId: z.number().optional().nullable().describe("Folder ID (null for default 'My Routines' folder)"),
-				notes: z.string().optional().describe("Notes for the routine"),
-				exercises: z.array(z.object({
-					exerciseTemplateId: z.string().describe("Exercise template ID"),
-					supersetId: z.number().optional().nullable().describe("Superset ID (null if not in a superset)"),
-					restSeconds: z.number().optional().nullable().describe("Rest time in seconds between sets"),
-					notes: z.string().optional().nullable().describe("Notes for this exercise"),
-					sets: z.array(z.object({
-						type: z.enum(["warmup", "normal", "failure", "dropset"]).optional().describe("Set type"),
-						weightKg: z.number().optional().nullable().describe("Weight in kilograms"),
-						reps: z.number().optional().nullable().describe("Number of repetitions"),
-						distanceMeters: z.number().optional().nullable().describe("Distance in meters"),
-						durationSeconds: z.number().optional().nullable().describe("Duration in seconds"),
-						customMetric: z.number().optional().nullable().describe("Custom metric (for steps/floors)"),
-						repRange: z.object({
-							start: z.number().optional().nullable().describe("Starting rep count for the range"),
-							end: z.number().optional().nullable().describe("Ending rep count for the range")
-						}).optional().nullable().describe("Range of reps for the set (e.g., 8-12 reps)")
-					})).describe("Sets for this exercise")
-				})).describe("Exercises in the routine")
-			},
+			CreateRoutineSchema.shape,
 			async (args) => {
 				try {
-					// Transform camelCase to snake_case for API
-					// NOTE: Unlike workouts, routines don't use index or title fields in the request
-					const exercises = args.exercises.map((ex: any) => ({
-						exercise_template_id: ex.exerciseTemplateId,
-						superset_id: ex.supersetId,
-						rest_seconds: ex.restSeconds,
-						notes: ex.notes,
-						sets: ex.sets.map((set: any) => ({
-							type: set.type,
-							weight_kg: set.weightKg,
-							reps: set.reps,
-							distance_meters: set.distanceMeters,
-							duration_seconds: set.durationSeconds,
-							custom_metric: set.customMetric,
-							rep_range: set.repRange ? {
-								start: set.repRange.start,
-								end: set.repRange.end
-							} : undefined
-						}))
-					}));
-
-					const routine = await this.client.createRoutine({
-						routine: {
-							title: args.title,
-							folder_id: args.folderId,
-							notes: args.notes,
-							exercises
-						}
-					});
+					// Validate routine data including exercises and sets
+					validateRoutineData(args);
+					
+					const routine = await this.client.createRoutine(transformRoutineToAPI(args));
 
 					return {
 						content: [
@@ -502,74 +343,26 @@ export class MyMCP extends McpAgent {
 							},
 						],
 					};
-				} catch (error) {
-					return {
-						content: [
-							{
-								type: "text",
-								text: `Error: ${error instanceof Error ? error.message : "Unknown error occurred"}`,
-							},
-						],
-					};
-				}
+			} catch (error) {
+				return handleError(error);
+			}
 			}
 		);
 
 		this.server.tool(
 			"update_routine",
 			{
-				routineId: z.string().describe("The ID of the routine to update"),
-				title: z.string().describe("Title of the routine"),
-				notes: z.string().optional().nullable().describe("Notes for the routine"),
-				exercises: z.array(z.object({
-					exerciseTemplateId: z.string().describe("Exercise template ID"),
-					supersetId: z.number().optional().nullable().describe("Superset ID (null if not in a superset)"),
-					restSeconds: z.number().optional().nullable().describe("Rest time in seconds between sets"),
-					notes: z.string().optional().nullable().describe("Notes for this exercise"),
-					sets: z.array(z.object({
-						type: z.enum(["warmup", "normal", "failure", "dropset"]).optional().describe("Set type"),
-						weightKg: z.number().optional().nullable().describe("Weight in kilograms"),
-						reps: z.number().optional().nullable().describe("Number of repetitions"),
-						distanceMeters: z.number().optional().nullable().describe("Distance in meters"),
-						durationSeconds: z.number().optional().nullable().describe("Duration in seconds"),
-						customMetric: z.number().optional().nullable().describe("Custom metric (for steps/floors)"),
-						repRange: z.object({
-							start: z.number().optional().nullable().describe("Starting rep count for the range"),
-							end: z.number().optional().nullable().describe("Ending rep count for the range")
-						}).optional().nullable().describe("Range of reps for the set (e.g., 8-12 reps)")
-					})).describe("Sets for this exercise")
-				})).describe("Exercises in the routine")
+				routine_id: z.string().describe("The ID of the routine to update"),
+				...UpdateRoutineSchema.shape,
 			},
 			async (args) => {
 				try {
-					// Transform camelCase to snake_case for API
-					// NOTE: Unlike workouts, routines don't use index fields in the request
-					const exercises = args.exercises.map((ex: any) => ({
-						exercise_template_id: ex.exerciseTemplateId,
-						superset_id: ex.supersetId,
-						rest_seconds: ex.restSeconds,
-						notes: ex.notes,
-						sets: ex.sets.map((set: any) => ({
-							type: set.type,
-							weight_kg: set.weightKg,
-							reps: set.reps,
-							distance_meters: set.distanceMeters,
-							duration_seconds: set.durationSeconds,
-							custom_metric: set.customMetric,
-							rep_range: set.repRange ? {
-								start: set.repRange.start,
-								end: set.repRange.end
-							} : undefined
-						}))
-					}));
+					const { routine_id, ...routineData } = args;
 
-					const routine = await this.client.updateRoutine(args.routineId, {
-						routine: {
-							title: args.title,
-							notes: args.notes,
-							exercises
-						}
-					});
+					// Validate routine data including exercises and sets
+					validateRoutineData(routineData);
+
+					const routine = await this.client.updateRoutine(routine_id, transformRoutineToAPI(routineData));
 
 					return {
 						content: [
@@ -583,16 +376,9 @@ export class MyMCP extends McpAgent {
 							},
 						],
 					};
-				} catch (error) {
-					return {
-						content: [
-							{
-								type: "text",
-								text: `Error: ${error instanceof Error ? error.message : "Unknown error occurred"}`,
-							},
-						],
-					};
-				}
+			} catch (error) {
+				return handleError(error);
+			}
 			}
 		);
 
@@ -604,11 +390,14 @@ export class MyMCP extends McpAgent {
 			"get_exercise_templates",
 			{
 				page: z.number().optional().describe("Page number (Must be 1 or greater)").default(1),
-				pageSize: z.number().optional().describe("Number of items per page (Max 100)").default(20),
+				page_size: z.number().optional().describe("Number of items per page (Max 100)").default(20),
 			},
-			async ({ page, pageSize }) => {
+			async ({ page, page_size }) => {
 				try {
-					const templates = await this.client.getExerciseTemplates({ page, pageSize });
+					// Validate pagination parameters with higher limit for templates
+					validatePagination(page, page_size, PAGINATION_LIMITS.EXERCISE_TEMPLATES);
+
+					const templates = await this.client.getExerciseTemplates({ page, pageSize: page_size });
 
 					const templateDetails = templates.exercise_templates?.map((template: any, index: number) => {
 						return `${index + 1}. ${template.title} (${template.type})\n   ID: ${template.id}\n   Primary: ${template.primary_muscle_group}\n   Custom: ${template.is_custom ? 'Yes' : 'No'}`;
@@ -626,27 +415,20 @@ export class MyMCP extends McpAgent {
 							},
 						],
 					};
-				} catch (error) {
-					return {
-						content: [
-							{
-								type: "text",
-								text: `Error: ${error instanceof Error ? error.message : "Unknown error occurred"}`,
-							},
-						],
-					};
-				}
+			} catch (error) {
+				return handleError(error);
+			}
 			}
 		);
 
 		this.server.tool(
 			"get_exercise_template",
 			{
-				exerciseTemplateId: z.string().describe("The ID of the exercise template"),
+				exercise_template_id: z.string().describe("The ID of the exercise template"),
 			},
-			async ({ exerciseTemplateId }) => {
+			async ({ exercise_template_id }) => {
 				try {
-					const template = await this.client.getExerciseTemplate(exerciseTemplateId);
+					const template = await this.client.getExerciseTemplate(exercise_template_id);
 
 					return {
 						content: [
@@ -660,100 +442,21 @@ export class MyMCP extends McpAgent {
 							},
 						],
 					};
-				} catch (error) {
-					return {
-						content: [
-							{
-								type: "text",
-								text: `Error: ${error instanceof Error ? error.message : "Unknown error occurred"}`,
-							},
-						],
-					};
-				}
+			} catch (error) {
+				return handleError(error);
+			}
 			}
 		);
 
 		this.server.tool(
 			"create_exercise_template",
-			{
-				title: z.string().describe("Title of the exercise"),
-				exerciseType: z.enum([
-					"weight_reps",
-					"reps_only",
-					"bodyweight_reps",
-					"bodyweight_assisted_reps",
-					"duration",
-					"weight_duration",
-					"distance_duration",
-					"short_distance_weight"
-				]).describe("The exercise type"),
-				equipmentCategory: z.enum([
-					"none",
-					"barbell",
-					"dumbbell",
-					"kettlebell",
-					"machine",
-					"plate",
-					"resistance_band",
-					"suspension",
-					"other"
-				]).describe("Equipment category"),
-				muscleGroup: z.enum([
-					"abdominals",
-					"shoulders",
-					"biceps",
-					"triceps",
-					"forearms",
-					"quadriceps",
-					"hamstrings",
-					"calves",
-					"glutes",
-					"abductors",
-					"adductors",
-					"lats",
-					"upper_back",
-					"traps",
-					"lower_back",
-					"chest",
-					"cardio",
-					"neck",
-					"full_body",
-					"other"
-				]).describe("Primary muscle group"),
-				otherMuscles: z.array(z.enum([
-					"abdominals",
-					"shoulders",
-					"biceps",
-					"triceps",
-					"forearms",
-					"quadriceps",
-					"hamstrings",
-					"calves",
-					"glutes",
-					"abductors",
-					"adductors",
-					"lats",
-					"upper_back",
-					"traps",
-					"lower_back",
-					"chest",
-					"cardio",
-					"neck",
-					"full_body",
-					"other"
-				])).optional().describe("Secondary muscle groups"),
-			},
+			CreateExerciseTemplateSchema.shape,
 			async (args) => {
 				try {
-					const result = await this.client.createExerciseTemplate({
-						exercise: {
-							title: args.title,
-							exercise_type: args.exerciseType,
-							equipment_category: args.equipmentCategory,
-							muscle_group: args.muscleGroup,
-							other_muscles: args.otherMuscles
-						}
-					});
+					// Validate exercise template data
+					validateExerciseTemplate(args);
+					
+					const result = await this.client.createExerciseTemplate(transformExerciseTemplateToAPI(args));
 
 					return {
 						content: [
@@ -767,33 +470,43 @@ export class MyMCP extends McpAgent {
 							},
 						],
 					};
-				} catch (error) {
-					return {
-						content: [
-							{
-								type: "text",
-								text: `Error: ${error instanceof Error ? error.message : "Unknown error occurred"}`,
-							},
-						],
-					};
-				}
+			} catch (error) {
+				return handleError(error);
+			}
 			}
 		);
 
 		this.server.tool(
 			"get_exercise_history",
 			{
-				exerciseTemplateId: z.string().describe("The ID of the exercise template"),
-				startDate: z.string().optional().describe("Optional start date (ISO 8601 format, e.g., 2024-01-01T00:00:00Z)"),
-				endDate: z.string().optional().describe("Optional end date (ISO 8601 format, e.g., 2024-12-31T23:59:59Z)"),
+				exercise_template_id: z.string().describe("The ID of the exercise template"),
+				start_date: z.string().optional().describe("Optional start date (ISO 8601 format, e.g., 2024-01-01T00:00:00Z)"),
+				end_date: z.string().optional().describe("Optional end date (ISO 8601 format, e.g., 2024-12-31T23:59:59Z)"),
 			},
 			async (args) => {
 				try {
-					const params: any = {};
-					if (args.startDate) params.start_date = args.startDate;
-					if (args.endDate) params.end_date = args.endDate;
+					// Validate date formats if provided
+					if (args.start_date) {
+						validateISO8601Date(args.start_date, "start_date");
+					}
+					if (args.end_date) {
+						validateISO8601Date(args.end_date, "end_date");
+					}
 
-					const history = await this.client.getExerciseHistory(args.exerciseTemplateId, params);
+					// Validate that end_date is after start_date if both are provided
+					if (args.start_date && args.end_date) {
+						const start = new Date(args.start_date);
+						const end = new Date(args.end_date);
+						if (end <= start) {
+							throw new ValidationError("end_date must be after start_date");
+						}
+					}
+
+					const params: any = {};
+					if (args.start_date) params.start_date = args.start_date;
+					if (args.end_date) params.end_date = args.end_date;
+
+					const history = await this.client.getExerciseHistory(args.exercise_template_id, params);
 
 					const historyDetails = history.exercise_history?.map((entry: any, index: number) => {
 						return `${index + 1}. ${entry.workout_title} (${entry.workout_start_time})\n   Weight: ${entry.weight_kg}kg, Reps: ${entry.reps}, RPE: ${entry.rpe || 'N/A'}\n   Set Type: ${entry.set_type}`;
@@ -815,16 +528,9 @@ export class MyMCP extends McpAgent {
 							},
 						],
 					};
-				} catch (error) {
-					return {
-						content: [
-							{
-								type: "text",
-								text: `Error: ${error instanceof Error ? error.message : "Unknown error occurred"}`,
-							},
-						],
-					};
-				}
+			} catch (error) {
+				return handleError(error);
+			}
 			}
 		);
 
@@ -836,11 +542,14 @@ export class MyMCP extends McpAgent {
 			"get_routine_folders",
 			{
 				page: z.number().optional().describe("Page number (Must be 1 or greater)").default(1),
-				pageSize: z.number().optional().describe("Number of items per page (Max 10)").default(10),
+				page_size: z.number().optional().describe("Number of items per page (Max 10)").default(10),
 			},
-			async ({ page, pageSize }) => {
+			async ({ page, page_size }) => {
 				try {
-					const folders = await this.client.getRoutineFolders({ page, pageSize });
+					// Validate pagination parameters
+					validatePagination(page, page_size, PAGINATION_LIMITS.ROUTINE_FOLDERS);
+
+					const folders = await this.client.getRoutineFolders({ page, pageSize: page_size });
 
 					const folderDetails = folders.routine_folders?.map((folder: any, index: number) => {
 						return `${index + 1}. ${folder.title}\n   ID: ${folder.id}\n   Index: ${folder.index}`;
@@ -858,27 +567,20 @@ export class MyMCP extends McpAgent {
 							},
 						],
 					};
-				} catch (error) {
-					return {
-						content: [
-							{
-								type: "text",
-								text: `Error: ${error instanceof Error ? error.message : "Unknown error occurred"}`,
-							},
-						],
-					};
-				}
+			} catch (error) {
+				return handleError(error);
+			}
 			}
 		);
 
 		this.server.tool(
 			"get_routine_folder",
 			{
-				folderId: z.string().describe("The ID of the routine folder"),
+				folder_id: z.string().describe("The ID of the routine folder"),
 			},
-			async ({ folderId }) => {
+			async ({ folder_id }) => {
 				try {
-					const folder = await this.client.getRoutineFolder(folderId);
+					const folder = await this.client.getRoutineFolder(folder_id);
 
 					return {
 						content: [
@@ -892,31 +594,18 @@ export class MyMCP extends McpAgent {
 							},
 						],
 					};
-				} catch (error) {
-					return {
-						content: [
-							{
-								type: "text",
-								text: `Error: ${error instanceof Error ? error.message : "Unknown error occurred"}`,
-							},
-						],
-					};
-				}
+			} catch (error) {
+				return handleError(error);
+			}
 			}
 		);
 
 		this.server.tool(
 			"create_routine_folder",
-			{
-				title: z.string().describe("Title of the routine folder"),
-			},
-			async ({ title }) => {
+			CreateRoutineFolderSchema.shape,
+			async (args) => {
 				try {
-					const folder = await this.client.createRoutineFolder({
-						routine_folder: {
-							title
-						}
-					});
+					const folder = await this.client.createRoutineFolder(transformRoutineFolderToAPI(args));
 
 					return {
 						content: [
@@ -930,16 +619,9 @@ export class MyMCP extends McpAgent {
 							},
 						],
 					};
-				} catch (error) {
-					return {
-						content: [
-							{
-								type: "text",
-								text: `Error: ${error instanceof Error ? error.message : "Unknown error occurred"}`,
-							},
-						],
-					};
-				}
+			} catch (error) {
+				return handleError(error);
+			}
 			}
 		);
 	}
