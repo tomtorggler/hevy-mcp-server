@@ -1079,7 +1079,7 @@ export default {
 			
 			<div class="docs-section">
 				<h2>📚 Documentation</h2>
-				<p>For complete setup instructions and detailed documentation, visit the <a href="https://github.com/tomtorggler/hevy-mcp-server" target="_blank">GitHub repository</a></p>
+				<p>For setup instructions and documentation, visit the <a href="https://github.com/tomtorggler/hevy-mcp-server" target="_blank">GitHub repository</a> or the <a href="https://deepwiki.com/tomtorggler/hevy-mcp-server" target="_blank">DeepWiki page</a>.</p>
 			</div>
 		</div>
 	</div>
