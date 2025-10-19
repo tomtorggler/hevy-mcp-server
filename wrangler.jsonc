@@ -2,10 +2,6 @@
  * For more details on how to configure Wrangler, refer to:
  * https://developers.cloudflare.com/workers/wrangler/configuration/
  */
-/**
- * For more details on how to configure Wrangler, refer to:
- * https://developers.cloudflare.com/workers/wrangler/configuration/
- */
 {
 	"$schema": "node_modules/wrangler/config-schema.json",
 	"name": "hevy-mcp-server",
@@ -37,22 +33,41 @@
 		"enabled": true
 	},
 	/**
-	 * KV Namespaces
+	 * KV Namespaces - Production
 	 * Stores encrypted user API keys for multi-user OAuth support
 	 */
 	"kv_namespaces": [
 		{
 			"binding": "OAUTH_KV",
-			"id": "c449b150e27b4ed6a7f958e81495da16",
-			"preview_id": "b58f63e9889b4f87b6ad153501e1e165"
+			"id": "c449b150e27b4ed6a7f958e81495da16"
 		}
 	],
+	/**
+	 * Production Routes
+	 * Custom domain configuration for production deployment
+	 */
 	"routes": [
 		{
 			"pattern": "hevy.tomt.it",
 			"custom_domain": true
 		}
-	]
+	],
+	/**
+	 * Development Environment
+	 * Overrides for local development to avoid Host header rewriting
+	 */
+	"env": {
+		"dev": {
+			"name": "hevy-mcp-server-dev",
+			"kv_namespaces": [
+				{
+					"binding": "OAUTH_KV",
+					"id": "b58f63e9889b4f87b6ad153501e1e165"
+				}
+			]
+			// No routes for dev - prevents Host header issues in local development
+		}
+	}
 	/**
 	 * Smart Placement
 	 * Docs: https://developers.cloudflare.com/workers/configuration/smart-placement/#smart-placement

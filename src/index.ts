@@ -52,8 +52,12 @@ export class MyMCP extends McpAgent<Env, Record<string, never>, Props> {
 	async init() {
 		// Check if user is authenticated
 		if (!this.props || !this.props.login) {
+			const setupHint = this.props?.baseUrl
+				? ` Visit ${this.props.baseUrl}/setup to get started.`
+				: " Visit your server URL to authenticate.";
 			throw new Error(
-				"Authentication required. Please authenticate via OAuth to use the Hevy MCP server."
+				"Authentication required. Please authenticate via OAuth to use the Hevy MCP server." +
+					setupHint
 			);
 		}
 
@@ -65,8 +69,9 @@ export class MyMCP extends McpAgent<Env, Record<string, never>, Props> {
 		);
 
 		if (!hevyApiKey) {
-			// Note: Replace with your deployed worker URL
-			const setupUrl = `https://${env.WORKER_URL || 'hevy-mcp-server.<your-account>.workers.dev'}/setup`;
+			const setupUrl = this.props.baseUrl
+				? `${this.props.baseUrl}/setup`
+				: '/setup (visit your server URL)';
 			throw new Error(
 				`Hevy API key not configured for user ${this.props.login}. ` +
 					`Please visit ${setupUrl} to configure your API key.`
@@ -676,11 +681,13 @@ export class MyMCP extends McpAgent<Env, Record<string, never>, Props> {
  */
 async function getUserPropsFromToken(env: Env, request: Request): Promise<Props | null> {
 	const authHeader = request.headers.get("Authorization");
+
 	if (!authHeader || !authHeader.startsWith("Bearer ")) {
 		return null;
 	}
 
 	const token = authHeader.substring(7); // Remove "Bearer " prefix
+
 	const sessionData = await env.OAUTH_KV.get(`session:${token}`, "json");
 
 	if (!sessionData || typeof sessionData !== "object") {
@@ -730,8 +737,24 @@ export default {
 
 		// MCP endpoints - require authentication via Bearer token
 		if (url.pathname === "/mcp" || url.pathname.startsWith("/mcp/")) {
+			// Allow OPTIONS requests for CORS preflight
+			if (request.method === "OPTIONS") {
+				return new Response(null, {
+					status: 204,
+					headers: {
+						"Access-Control-Allow-Origin": "*",
+						"Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+						"Access-Control-Allow-Headers": "Content-Type, Authorization",
+						"Access-Control-Max-Age": "86400",
+					},
+				});
+			}
+
 			const props = await getUserPropsFromToken(env, request);
+
 			if (!props) {
+				const wwwAuthenticateValue = `Bearer realm="${url.origin}", error="invalid_token", error_description="Authentication required"`;
+
 				return new Response(
 					JSON.stringify({
 						error: "unauthorized",
@@ -739,7 +762,11 @@ export default {
 					}),
 					{
 						status: 401,
-						headers: { "Content-Type": "application/json" },
+						headers: {
+							"Content-Type": "application/json",
+							"Access-Control-Allow-Origin": "*",
+							"WWW-Authenticate": wwwAuthenticateValue,
+						},
 					}
 				);
 			}
@@ -749,7 +776,14 @@ export default {
 			(ctx as any).props = props;
 
 			// Forward request to MCP handler (which will create/get the DO with props)
-			return mcpHandlers.streamableHTTP.fetch(request, env, ctx);
+			const response = await mcpHandlers.streamableHTTP.fetch(request, env, ctx);
+
+			// Add CORS headers to response
+			response.headers.set("Access-Control-Allow-Origin", "*");
+			response.headers.set("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+			response.headers.set("Access-Control-Allow-Headers", "Content-Type, Authorization");
+
+			return response;
 		}
 
 		// Legacy SSE endpoint for backward compatibility

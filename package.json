@@ -1,6 +1,6 @@
 {
 	"name": "hevy-mcp-server",
-	"version": "2.2.0",
+	"version": "3.0.0",
 	"description": "A Model Context Protocol (MCP) server for the Hevy fitness tracking API, deployed on Cloudflare Workers",
 	"keywords": ["mcp", "model-context-protocol", "hevy", "fitness", "cloudflare-workers", "ai", "claude"],
 	"repository": {
@@ -13,10 +13,10 @@
 	"homepage": "https://github.com/tomtorggler/hevy-mcp-server#readme",
 	"scripts": {
 		"deploy": "wrangler deploy",
-		"dev": "wrangler dev",
+		"dev": "wrangler dev --env dev --port 8787",
 		"format": "biome format --write",
 		"lint:fix": "biome lint --fix",
-		"start": "wrangler dev",
+		"start": "wrangler dev --env dev --port 8787",
 		"cf-typegen": "wrangler types",
 		"type-check": "tsc --noEmit",
 		"test": "vitest",

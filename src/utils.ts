@@ -5,14 +5,14 @@
 
 /**
  * Props type that holds user information from GitHub OAuth
- * Extended with Hevy API key loaded from KV storage
+ * Note: Hevy API keys are stored separately in KV and fetched as needed
  */
 export type Props = {
 	login: string; // GitHub username
 	name: string; // GitHub display name
 	email: string; // GitHub email
 	accessToken: string; // GitHub access token
-	hevyApiKey?: string; // User's Hevy API key (from KV)
+	baseUrl?: string; // Base URL of the worker (for generating setup links)
 };
 
 /**

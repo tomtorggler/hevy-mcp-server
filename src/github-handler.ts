@@ -34,6 +34,29 @@ interface Env {
 // Create Hono app for OAuth routes
 const app = new Hono<{ Bindings: Env }>();
 
+// Add CORS middleware for all routes
+app.use("*", async (c, next) => {
+	// Handle OPTIONS preflight requests
+	if (c.req.method === "OPTIONS") {
+		return new Response(null, {
+			status: 204,
+			headers: {
+				"Access-Control-Allow-Origin": "*",
+				"Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
+				"Access-Control-Allow-Headers": "Content-Type, Authorization",
+				"Access-Control-Max-Age": "86400",
+			},
+		});
+	}
+
+	await next();
+
+	// Add CORS headers to all responses
+	c.res.headers.set("Access-Control-Allow-Origin", "*");
+	c.res.headers.set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
+	c.res.headers.set("Access-Control-Allow-Headers", "Content-Type, Authorization");
+});
+
 /**
  * Generate a random state parameter for OAuth
  */
@@ -44,6 +67,26 @@ function generateState(): string {
 }
 
 /**
+ * GET /.well-known/oauth-protected-resource
+ * OAuth 2.0 Resource Server Metadata (RFC 8707)
+ * Tells clients how to access the protected resource
+ */
+app.get("/.well-known/oauth-protected-resource", (c) => {
+	const url = new URL(c.req.url);
+	const baseUrl = `${url.protocol}//${url.host}`;
+
+	const response = c.json({
+		resource: baseUrl,
+		authorization_servers: [`${baseUrl}`],
+		bearer_methods_supported: ["header"],
+		resource_documentation: `${baseUrl}/`,
+	});
+
+	response.headers.set("Access-Control-Allow-Origin", "*");
+	return response;
+});
+
+/**
  * GET /.well-known/oauth-authorization-server
  * OAuth 2.1 Authorization Server Metadata (RFC 8414)
  * Allows clients to discover OAuth configuration automatically
@@ -52,7 +95,7 @@ app.get("/.well-known/oauth-authorization-server", (c) => {
 	const url = new URL(c.req.url);
 	const baseUrl = `${url.protocol}//${url.host}`;
 
-	return c.json({
+	const response = c.json({
 		issuer: baseUrl,
 		authorization_endpoint: `${baseUrl}/authorize`,
 		token_endpoint: `${baseUrl}/token`,
@@ -65,6 +108,9 @@ app.get("/.well-known/oauth-authorization-server", (c) => {
 		revocation_endpoint_auth_methods_supported: ["none"],
 		service_documentation: `${baseUrl}/`,
 	});
+
+	response.headers.set("Access-Control-Allow-Origin", "*");
+	return response;
 });
 
 /**
@@ -247,11 +293,13 @@ app.get("/callback", async (c) => {
 
 		// Create session
 		const sessionToken = generateState();
+		const baseUrl = `${url.protocol}//${url.host}`;
 		const sessionData: Props = {
 			login: user.login,
 			name: user.name,
 			email: user.email,
 			accessToken,
+			baseUrl,
 		};
 
 		// Store session in KV (expires in 30 days)
