@@ -2,6 +2,8 @@
 
 A Model Context Protocol (MCP) server that provides AI assistants with access to the [Hevy](https://www.hevyapp.com/) fitness tracking API. This allows you to log workouts, manage routines, browse exercises, and track your fitness progress directly through AI chat interfaces.
 
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/tomtorggler/hevy-mcp-server)
+
 ## 🏋️ Features
 
 This MCP server provides comprehensive access to Hevy's fitness tracking capabilities:
