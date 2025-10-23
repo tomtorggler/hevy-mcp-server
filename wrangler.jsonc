@@ -59,6 +59,14 @@
 	"env": {
 		"dev": {
 			"name": "hevy-mcp-server-dev",
+			"durable_objects": {
+				"bindings": [
+					{
+						"class_name": "MyMCP",
+						"name": "MCP_OBJECT"
+					}
+				]
+			},
 			"kv_namespaces": [
 				{
 					"binding": "OAUTH_KV",
