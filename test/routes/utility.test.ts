@@ -71,8 +71,7 @@ describe("Utility Routes", () => {
 			expect(html).toContain("<html lang=\"en\">");
 			expect(html).toContain("<head>");
 			expect(html).toContain("<body>");
-			expect(html).toContain("🏋️ Hevy MCP Server");
-			expect(html).toContain("✅ Online & Ready");
+			expect(html).toContain("Hevy MCP Server");
 		});
 
 		it("should include setup link", async () => {

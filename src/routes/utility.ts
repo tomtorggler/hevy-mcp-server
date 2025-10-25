@@ -13,6 +13,39 @@ utilityRoutes.get("/health", (c) => {
 	});
 });
 
+// Stats endpoint - show user and session counts
+utilityRoutes.get("/stats", async (c) => {
+	try {
+		const kv = c.env.OAUTH_KV;
+
+		// List all keys with prefix "hevy_key:" to count users
+		const userKeys = await kv.list({ prefix: "hevy_key:" });
+		const totalUsers = userKeys.keys.length;
+
+		// List all keys with prefix "session:" to count active sessions
+		const sessionKeys = await kv.list({ prefix: "session:" });
+		const activeSessions = sessionKeys.keys.length;
+
+		// List approval tokens (pending OAuth flows)
+		const approvalKeys = await kv.list({ prefix: "approval:" });
+		const pendingApprovals = approvalKeys.keys.length;
+
+		return c.json({
+			total_users: totalUsers,
+			active_sessions: activeSessions,
+			pending_approvals: pendingApprovals,
+		});
+	} catch (error) {
+		console.error("Error fetching stats:", error);
+		return c.json({
+			error: "Failed to fetch stats",
+			total_users: 0,
+			active_sessions: 0,
+			pending_approvals: 0,
+		}, 500);
+	}
+});
+
 // Root endpoint - show OAuth info
 utilityRoutes.get("/", (c) => {
 	const html = `<!DOCTYPE html>
@@ -179,8 +212,8 @@ utilityRoutes.get("/", (c) => {
 <body>
 	<div class="container">
 		<div class="header">
-			<h1>🏋️ Hevy MCP Server</h1>
-			<div class="status">✅ Online & Ready</div>
+			<h1>Hevy MCP Server</h1>
+			<p id="user-count" style="margin-top: 1rem; font-size: 1.1rem; opacity: 0.9;">Loading stats...</p>
 		</div>
 		
 		<div class="setup-section">
@@ -217,11 +250,30 @@ utilityRoutes.get("/", (c) => {
 				and <a href="https://developers.cloudflare.com/workers/" target="_blank">Cloudflare Workers</a>
 			</p>
 			<p>
-				<a href="https://github.com/tomtorggler/hevy-mcp-server" target="_blank">View Source</a> • 
-				<a href="/health" target="_blank">Health Check</a>
+				<a href="https://github.com/tomtorggler/hevy-mcp-server" target="_blank">View Source</a> •
+				<a href="/health" target="_blank">Health Check</a> •
+				<a href="/stats" target="_blank">Stats</a>
 			</p>
 		</div>
 	</div>
+
+	<script>
+		// Fetch and display user stats
+		fetch('/stats')
+			.then(response => response.json())
+			.then(data => {
+				const userCountEl = document.getElementById('user-count');
+				if (data.total_users !== undefined) {
+					userCountEl.textContent = \`\${data.total_users} users • \${data.active_sessions} active sessions\`;
+				} else {
+					userCountEl.textContent = '';
+				}
+			})
+			.catch(error => {
+				console.error('Failed to load stats:', error);
+				document.getElementById('user-count').textContent = '';
+			});
+	</script>
 </body>
 </html>`;
 
