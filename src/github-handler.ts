@@ -67,13 +67,40 @@ function generateState(): string {
 }
 
 /**
+ * Helper function to get the base URL for OAuth endpoints
+ * Handles local development where Wrangler rewrites the Host header
+ */
+function getBaseUrl(c: any): string {
+	const url = new URL(c.req.url);
+
+	// Check for X-Forwarded-Host header (reverse proxy)
+	const forwardedHost = c.req.header("X-Forwarded-Host");
+	if (forwardedHost) {
+		return `${url.protocol}//${forwardedHost}`;
+	}
+
+	// Check if request came from localhost (local dev)
+	// Wrangler dev adds CF-Connecting-IP with localhost address
+	const cfConnectingIp = c.req.header("CF-Connecting-IP");
+
+	// Check if connecting from localhost (::1 is IPv6 localhost, 127.0.0.1 is IPv4)
+	const isLocalhost = cfConnectingIp === "::1" || cfConnectingIp === "127.0.0.1" || cfConnectingIp?.startsWith("127.");
+
+	if (isLocalhost) {
+		return `${url.protocol}//localhost:8787`;
+	}
+
+	// Production: use the Host header as-is
+	return `${url.protocol}//${url.host}`;
+}
+
+/**
  * GET /.well-known/oauth-protected-resource
  * OAuth 2.0 Resource Server Metadata (RFC 8707)
  * Tells clients how to access the protected resource
  */
 app.get("/.well-known/oauth-protected-resource", (c) => {
-	const url = new URL(c.req.url);
-	const baseUrl = `${url.protocol}//${url.host}`;
+	const baseUrl = getBaseUrl(c);
 
 	const response = c.json({
 		resource: baseUrl,
@@ -92,8 +119,7 @@ app.get("/.well-known/oauth-protected-resource", (c) => {
  * Allows clients to discover OAuth configuration automatically
  */
 app.get("/.well-known/oauth-authorization-server", (c) => {
-	const url = new URL(c.req.url);
-	const baseUrl = `${url.protocol}//${url.host}`;
+	const baseUrl = getBaseUrl(c);
 
 	const response = c.json({
 		issuer: baseUrl,

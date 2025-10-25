@@ -30,8 +30,8 @@ describe("Error Handling", () => {
 			const error = new HevyApiError("Unauthorized", 401);
 			const result = formatHevyApiError(error);
 
-			expect(result.content[0].text).toContain("❌ Unauthorized - Invalid API key");
-			expect(result.content[0].text).toContain("Verify your HEVY_API_KEY is set correctly");
+		expect(result.content[0].text).toContain("❌ Unauthorized - Invalid API key");
+		expect(result.content[0].text).toContain("Verify your Hevy API key is configured at /setup");
 			expect(result.isError).toBe(true);
 		});
 

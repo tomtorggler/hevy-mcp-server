@@ -116,15 +116,33 @@ Create a new routine folder.
 ```
 hevy-mcp-server/
 ├── src/
-│   ├── index.ts          # MCP server implementation & tool registration
+│   ├── index.ts             # Main exports (Hono app + Durable Object)
+│   ├── app.ts               # Hono application with routing & middleware
+│   ├── mcp-agent.ts         # MCP agent implementation & tool registration
+│   ├── mcp-handlers.ts      # MCP transport handlers (streamable-http, SSE)
+│   ├── middleware/
+│   │   └── auth.ts          # Bearer token authentication middleware
+│   ├── routes/
+│   │   ├── mcp.ts           # MCP endpoint routes
+│   │   └── utility.ts       # Health check & home page routes
 │   └── lib/
-│       └── client.ts     # Hevy API client wrapper
-├── .dev.vars             # Local environment variables (gitignored)
-├── .dev.vars.example     # Template for environment variables
-├── api.json              # Hevy API OpenAPI specification
-├── wrangler.jsonc        # Cloudflare Workers configuration
-├── package.json          # Dependencies and scripts
-└── CLAUDE.md            # This file
+│       ├── client.ts        # Hevy API client wrapper
+│       ├── schemas.ts       # Zod validation schemas
+│       ├── transforms.ts    # Data validation & transformation
+│       ├── errors.ts        # Error handling utilities
+│       └── key-storage.ts   # Encrypted API key storage
+├── test/                    # Comprehensive test suite (272 tests)
+│   ├── app.test.ts
+│   ├── middleware/
+│   ├── routes/
+│   ├── lib/
+│   └── integration/
+├── .dev.vars                # Local environment variables (gitignored)
+├── .dev.vars.example        # Template for environment variables
+├── api.json                 # Hevy API OpenAPI specification
+├── wrangler.jsonc           # Cloudflare Workers configuration
+├── package.json             # Dependencies and scripts
+└── CLAUDE.md               # This file
 ```
 
 ## Local Development
@@ -262,30 +280,85 @@ This server implements the Hevy API v1. Full API documentation available in `api
 
 - **Runtime:** Cloudflare Workers
 - **Language:** TypeScript
+- **Framework:** Hono v4.10.1 (lightweight web framework)
 - **MCP SDK:** @modelcontextprotocol/sdk v1.19.1
 - **Agent Framework:** agents v0.2.8
 - **Validation:** Zod v3.25.76
+- **Testing:** Vitest with 272+ tests
 
 ## Architecture
+
+### Application Structure
+
+The server uses a clean, modular architecture built on the Hono framework:
+
+**Entry Point (`src/index.ts`):**
+- Exports the Hono app as default export
+- Exports the `MyMCP` Durable Object class
+
+**Main Application (`src/app.ts`):**
+- Hono app with global CORS middleware
+- Error handling middleware
+- Route mounting in priority order:
+  1. OAuth/API routes (github-handler)
+  2. MCP endpoints (/mcp, /sse)
+  3. Utility routes (/health, /)
+
+**MCP Agent (`src/mcp-agent.ts`):**
+- `MyMCP` class extends `McpAgent` from agents library
+- Registers all 17 MCP tools (workouts, routines, exercises, etc.)
+- Handles OAuth authentication and per-user API key retrieval
+- Uses Zod schemas for input validation
+
+**Routing:**
+- **OAuth Routes** (`src/github-handler.ts`): GitHub OAuth flow for multi-user authentication
+- **MCP Routes** (`src/routes/mcp.ts`): MCP protocol endpoints with bearer auth
+- **Utility Routes** (`src/routes/utility.ts`): Health check and home page
+
+### Middleware
+
+**CORS Middleware (`src/app.ts`):**
+- Handles OPTIONS preflight requests
+- Adds CORS headers to all responses
+- Allows access from any origin
+
+**Bearer Auth Middleware (`src/middleware/auth.ts`):**
+- Validates Authorization header with Bearer tokens
+- Retrieves user session from KV storage
+- Injects user props into Hono context
+- Returns 401 with WWW-Authenticate header on failure
 
 ### Durable Objects
 
 The MCP server uses Cloudflare Durable Objects to maintain stateful connections:
-- Each MCP client session backed by a Durable Object
+- Each MCP client session backed by a Durable Object instance
 - Class: `MyMCP` extends `McpAgent`
 - Binding: `env.MCP_OBJECT`
+- Props passed via ExecutionContext for user authentication
 
 ### Transport
 
 - **Primary:** Streamable HTTP at `/mcp` (recommended)
 - **Legacy:** Server-Sent Events (SSE) at `/sse` (deprecated)
 - **Health Check:** `/health` endpoint for monitoring
+- **Home Page:** `/` with setup instructions and feature overview
 
-### Security
+### Security & Authentication
 
-- API key stored as Cloudflare secret (encrypted at rest)
-- No authentication required for MCP clients (authless mode)
-- API key never exposed to clients
+**Multi-User OAuth:**
+- GitHub OAuth for user authentication
+- Session tokens stored in KV namespace
+- Per-user Hevy API keys encrypted in KV storage
+
+**Bearer Token Authentication:**
+- MCP endpoints require `Authorization: Bearer <token>` header
+- Token validated against KV session storage
+- Proper HTTP 401 responses with WWW-Authenticate headers
+
+**API Key Security:**
+- Hevy API keys encrypted using `COOKIE_ENCRYPTION_KEY`
+- Keys stored per-user in KV namespace
+- Keys never exposed to clients or in responses
 
 ## Development Notes
 
@@ -300,7 +373,7 @@ async getNewEndpoint(options?: { param?: string }): Promise<any> {
 }
 ```
 
-2. **Register the tool** in `src/index.ts` in the `init()` method:
+2. **Register the tool** in `src/mcp-agent.ts` in the `init()` method:
 ```typescript
 this.server.tool(
   "get_new_endpoint",
@@ -318,23 +391,63 @@ this.server.tool(
         ],
       };
     } catch (error) {
-      return {
-        content: [{
-          type: "text",
-          text: `Error: ${error instanceof Error ? error.message : "Unknown error"}`
-        }],
-      };
+      return handleError(error);
     }
   }
 );
 ```
 
-3. Test locally with `npm start`
-4. Deploy with `npm run deploy`
+3. **Add tests** in `test/integration/mcp-tools.test.ts`:
+```typescript
+it("should get new endpoint data", async () => {
+  const result = await mcpClient.callTool("get_new_endpoint", { param: "test" });
+  expect(result).toBeDefined();
+});
+```
+
+4. Test locally with `npm start`
+5. Run tests with `npm test`
+6. Run type check with `npm run type-check`
+7. Deploy with `npm run deploy`
+
+### Adding New Routes
+
+To add a new HTTP route:
+
+1. **Add to appropriate route file** (`src/routes/utility.ts` or create new):
+```typescript
+utilityRoutes.get("/new-route", (c) => {
+  return c.json({ message: "Hello" });
+});
+```
+
+2. **Add route tests** in `test/routes/utility.test.ts`:
+```typescript
+it("should handle new route", async () => {
+  const response = await app.fetch(new Request("http://localhost/new-route"));
+  expect(response.status).toBe(200);
+});
+```
+
+3. **Mount route** in `src/app.ts` if creating a new route module
 
 ### File Watching
 
 Wrangler automatically reloads on file changes during development.
+
+### Testing
+
+Run the comprehensive test suite:
+```bash
+npm test                 # Run all tests (272+ tests)
+npm run type-check       # TypeScript compilation check
+```
+
+Test coverage includes:
+- Unit tests for middleware, routes, and utilities
+- Integration tests for MCP tools
+- Error handling scenarios
+- Authentication flows
 
 ## Migration from SSE to Streamable HTTP
 
@@ -415,23 +528,42 @@ https://dash.cloudflare.com/
 
 - [Hevy API Documentation](https://hevy.com/settings?developer)
 - [Model Context Protocol](https://modelcontextprotocol.io/)
+- [Hono Framework Documentation](https://hono.dev/)
+- [Hono Cloudflare Workers Guide](https://hono.dev/getting-started/cloudflare-workers)
 - [Cloudflare Workers Docs](https://developers.cloudflare.com/workers/)
+- [Cloudflare Durable Objects](https://developers.cloudflare.com/durable-objects/)
 - [Cloudflare MCP Guide](https://developers.cloudflare.com/agents/guides/remote-mcp-server/)
 - [mcp-remote adapter](https://www.npmjs.com/package/mcp-remote)
 
 ## License
 
-MIT License - see [LICENSE](LICENSE) file for details.
+Unlicense - see [LICENSE](LICENSE) file for details.
 
 This project is not affiliated with Hevy. Hevy is a trademark of Hevy Studios Inc.
 
-## Maintainer
-
-Tom Olausson
-
 ## Version
 
-2.2.0 - Current Release (Expanded API Coverage):
+3.1.0 - Current Release (Hono Framework Refactor):
+- 🎉 **Hono Framework Integration** - Complete refactor to use Hono for routing and middleware
+- ✅ **Modular Architecture:**
+  - Separated concerns: `app.ts` (routing), `mcp-agent.ts` (tools), `mcp-handlers.ts` (transports)
+  - Clean middleware pattern with `src/middleware/auth.ts`
+  - Organized routes in `src/routes/` directory
+  - Ultra-clean `index.ts` (6 lines vs 670+ lines before)
+- ✅ **Enhanced Testing:** 272+ tests across all components
+  - Unit tests for middleware and routes
+  - Integration tests for MCP tools
+  - Comprehensive error handling tests
+- ✅ **Better Developer Experience:**
+  - Clear separation of concerns
+  - Easier to add new routes and middleware
+  - Improved type safety with Hono context
+  - Factory pattern for dependency injection
+- ✅ **Improved Error Handling:** Global error middleware with proper HTTP status codes
+- ✅ **Enhanced CORS:** Global CORS middleware with OPTIONS preflight support
+- 📝 Updated documentation to reflect new architecture
+
+3.0.0 - Multi-User OAuth Release:
 - ✅ **17 total tools** - Full CRUD operations across all Hevy API endpoints
 - ✅ **Workouts:** get, get by ID, create, update, count, get events (sync support)
 - ✅ **Routines:** get, get by ID, create, update

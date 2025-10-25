@@ -306,6 +306,6 @@ npm test
 
 ## 📝 License
 
-MIT License - see [LICENSE](LICENSE) file for details.
+Unlicense - see [LICENSE](LICENSE) file for details.
 
 This project is not affiliated with Hevy. Hevy is a trademark of Hevy Studios Inc.

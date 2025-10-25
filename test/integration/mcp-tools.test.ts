@@ -770,8 +770,8 @@ describe("MCP Tools Integration Tests", () => {
 				expect.fail("Should have thrown");
 			} catch (error) {
 				const result = handleError(error);
-				expect(result.content[0].text).toContain("❌ Unauthorized - Invalid API key");
-				expect(result.content[0].text).toContain("Verify your HEVY_API_KEY");
+			expect(result.content[0].text).toContain("❌ Unauthorized - Invalid API key");
+			expect(result.content[0].text).toContain("Verify your Hevy API key is configured at /setup");
 				expect(result.isError).toBe(true);
 			}
 		});
