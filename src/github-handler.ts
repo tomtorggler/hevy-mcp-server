@@ -29,6 +29,44 @@ interface Env {
 	GITHUB_CLIENT_ID: string;
 	GITHUB_CLIENT_SECRET: string;
 	COOKIE_ENCRYPTION_KEY: string;
+	ADMIN_INVITE_CODE?: string;
+}
+
+const INVITE_COOKIE_NAME = "invite";
+const INVITE_COOKIE_MAX_AGE = 30 * 60; // 30 minutes — long enough to finish OAuth
+
+interface InviteRecord {
+	created_by: string;
+	created_at: string;
+	used_by?: string;
+	used_at?: string;
+}
+
+function readInviteCookie(c: any): string | null {
+	const cookie = c.req.header("Cookie");
+	const match = cookie?.match(new RegExp(`${INVITE_COOKIE_NAME}=([^;]+)`));
+	return match ? match[1] : null;
+}
+
+async function isInviteCodeValid(env: Env, code: string): Promise<boolean> {
+	if (!code) return false;
+	if (env.ADMIN_INVITE_CODE && code === env.ADMIN_INVITE_CODE) return true;
+	const record = await env.OAUTH_KV.get(`invite:${code}`, "json");
+	if (!record || typeof record !== "object") return false;
+	return !(record as InviteRecord).used_by;
+}
+
+async function consumeInviteCode(env: Env, code: string, githubLogin: string): Promise<void> {
+	if (!code) return;
+	if (env.ADMIN_INVITE_CODE && code === env.ADMIN_INVITE_CODE) return;
+	const record = await env.OAUTH_KV.get(`invite:${code}`, "json");
+	if (!record || typeof record !== "object") return;
+	const updated: InviteRecord = {
+		...(record as InviteRecord),
+		used_by: githubLogin,
+		used_at: new Date().toISOString(),
+	};
+	await env.OAUTH_KV.put(`invite:${code}`, JSON.stringify(updated));
 }
 
 // Create Hono app for OAuth routes
@@ -200,10 +238,18 @@ app.get("/authorize", async (c) => {
 		}
 	}
 
+	// New signup attempt — require a valid invite code before talking to GitHub.
+	const inviteCode = readInviteCookie(c);
+	if (!inviteCode || !(await isInviteCodeValid(c.env, inviteCode))) {
+		const inviteUrl = new URL("/invite", new URL(c.req.url).origin);
+		inviteUrl.searchParams.set("next", c.req.url);
+		return c.redirect(inviteUrl.toString());
+	}
+
 	// User not authenticated, redirect to GitHub OAuth
 	const githubState = generateState();
 
-	// Store OAuth state and client info
+	// Store OAuth state and client info (carry the invite code so callback can consume it)
 	await c.env.OAUTH_KV.put(
 		`oauth_state:${githubState}`,
 		JSON.stringify({
@@ -211,6 +257,7 @@ app.get("/authorize", async (c) => {
 			redirectUri,
 			state,
 			scope,
+			inviteCode,
 		}),
 		{ expirationTtl: 600 } // 10 minutes
 	);
@@ -295,11 +342,12 @@ app.get("/callback", async (c) => {
 		return c.text("Invalid or expired state parameter", 400);
 	}
 
-	const { clientId, redirectUri, state: clientState, scope } = stateData as {
+	const { clientId, redirectUri, state: clientState, scope, inviteCode } = stateData as {
 		clientId: string;
 		redirectUri: string;
 		state: string;
 		scope: string;
+		inviteCode?: string;
 	};
 
 	try {
@@ -336,6 +384,11 @@ app.get("/callback", async (c) => {
 		// Clean up state
 		await c.env.OAUTH_KV.delete(`oauth_state:${state}`);
 
+		// Consume the invite code so it can't be reused
+		if (inviteCode) {
+			await consumeInviteCode(c.env, inviteCode, user.login);
+		}
+
 		// Check if client is already approved
 		const alreadyApproved = await clientIdAlreadyApproved(c.env.OAUTH_KV, user.login, clientId);
 
@@ -356,11 +409,15 @@ app.get("/callback", async (c) => {
 			redirectUrl.searchParams.set("code", authCode);
 			redirectUrl.searchParams.set("state", clientState);
 
-			// Set session cookie
+			// Set session cookie + clear invite cookie
 			const response = c.redirect(redirectUrl.toString());
-			response.headers.set(
+			response.headers.append(
 				"Set-Cookie",
 				`session=${sessionToken}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${30 * 24 * 60 * 60}`
+			);
+			response.headers.append(
+				"Set-Cookie",
+				`${INVITE_COOKIE_NAME}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0`
 			);
 			return response;
 		}
@@ -377,9 +434,13 @@ app.get("/callback", async (c) => {
 		});
 
 		const response = c.html(html);
-		response.headers.set(
+		response.headers.append(
 			"Set-Cookie",
 			`session=${sessionToken}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${30 * 24 * 60 * 60}`
+		);
+		response.headers.append(
+			"Set-Cookie",
+			`${INVITE_COOKIE_NAME}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0`
 		);
 		return response;
 	} catch (error) {
@@ -575,6 +636,113 @@ async function getAuthenticatedSession(c: any): Promise<Props | null> {
 
 	return sessionData as Props;
 }
+
+/**
+ * GET /invite
+ * Invite-code gate. Accepts ?code=... to auto-submit, or shows a form.
+ */
+app.get("/invite", async (c) => {
+	const code = c.req.query("code")?.trim() || "";
+	const next = c.req.query("next") || "/setup";
+
+	if (code) {
+		const valid = await isInviteCodeValid(c.env, code);
+		if (valid) {
+			const response = c.redirect(next);
+			response.headers.append(
+				"Set-Cookie",
+				`${INVITE_COOKIE_NAME}=${code}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${INVITE_COOKIE_MAX_AGE}`
+			);
+			return response;
+		}
+	}
+
+	const errorBlock = code
+		? `<div class="error">That invite code isn't valid (or has already been used).</div>`
+		: "";
+
+	const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<title>Invite required · Hevy MCP</title>
+	<style>
+		* { margin: 0; padding: 0; box-sizing: border-box; }
+		body {
+			font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+			background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+			min-height: 100vh;
+			display: flex; align-items: center; justify-content: center;
+			padding: 20px;
+		}
+		.card {
+			background: white; border-radius: 12px; padding: 40px;
+			max-width: 440px; width: 100%;
+			box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+		}
+		h1 { color: #333; margin-bottom: 8px; font-size: 22px; }
+		p { color: #666; margin-bottom: 20px; font-size: 14px; line-height: 1.5; }
+		label { display: block; font-weight: 600; margin-bottom: 8px; color: #333; font-size: 14px; }
+		input[type="text"] {
+			width: 100%; padding: 12px; border: 2px solid #e0e0e0;
+			border-radius: 6px; font-size: 14px; font-family: monospace;
+		}
+		input[type="text"]:focus { outline: none; border-color: #667eea; }
+		button {
+			margin-top: 16px; width: 100%; padding: 12px;
+			background: #667eea; color: white; border: none;
+			border-radius: 6px; font-size: 16px; font-weight: 600; cursor: pointer;
+		}
+		button:hover { background: #5568d3; }
+		.error {
+			background: #f8d7da; color: #721c24; border: 1px solid #f5c6cb;
+			padding: 12px; border-radius: 6px; margin-bottom: 16px; font-size: 14px;
+		}
+	</style>
+</head>
+<body>
+	<div class="card">
+		<h1>🎟️ Invite required</h1>
+		<p>This server is invite-only. Enter your code to continue.</p>
+		${errorBlock}
+		<form method="GET" action="/invite">
+			<label for="code">Invite code</label>
+			<input type="text" id="code" name="code" required autofocus value="${code.replace(/"/g, "&quot;")}" />
+			<input type="hidden" name="next" value="${next.replace(/"/g, "&quot;")}" />
+			<button type="submit">Continue</button>
+		</form>
+	</div>
+</body>
+</html>`;
+
+	return c.html(html);
+});
+
+/**
+ * POST /api/create-invite
+ * Generate a new single-use invite code (logged-in users only).
+ */
+app.post("/api/create-invite", async (c) => {
+	const session = await getAuthenticatedSession(c);
+	if (!session) {
+		return c.json({ error: "Unauthorized" }, 401);
+	}
+
+	const code = generateState();
+	const record: InviteRecord = {
+		created_by: session.login,
+		created_at: new Date().toISOString(),
+	};
+	await c.env.OAUTH_KV.put(`invite:${code}`, JSON.stringify(record), {
+		expirationTtl: 30 * 24 * 60 * 60, // 30 days
+	});
+
+	const url = new URL(c.req.url);
+	const inviteUrl = `${url.protocol}//${url.host}/invite?code=${code}`;
+
+	return c.json({ code, url: inviteUrl });
+});
 
 /**
  * GET /setup
@@ -885,6 +1053,30 @@ app.get("/setup", async (c) => {
 			<button id="deleteBtn" class="btn-danger" style="width: 100%;">Delete API Key</button>
 		</div>
 		` : ""}
+
+		<div style="margin-top: 30px; padding-top: 24px; border-top: 1px solid #e0e0e0;">
+			<h2 style="font-size: 18px; color: #333; margin-bottom: 12px;">🔌 Connect Claude</h2>
+			<p style="color: #555; font-size: 14px; margin-bottom: 12px;">
+				After saving your API key, add this server to Claude as a custom connector:
+			</p>
+			<ol style="color: #555; font-size: 14px; line-height: 1.7; padding-left: 20px; margin-bottom: 12px;">
+				<li>In Claude, open <strong>Settings → Connectors</strong> and click <strong>Add custom connector</strong>.</li>
+				<li>Set the URL to:
+					<div style="margin-top: 6px; padding: 8px 10px; background: #f1f3f5; border-radius: 4px; font-family: monospace; font-size: 13px; word-break: break-all;" id="mcpUrl"></div>
+				</li>
+				<li>Click <strong>Connect</strong> and complete the GitHub login when prompted.</li>
+				<li>You're done — Claude can now read and update your Hevy data.</li>
+			</ol>
+		</div>
+
+		<div style="margin-top: 30px; padding-top: 24px; border-top: 1px solid #e0e0e0;">
+			<h2 style="font-size: 18px; color: #333; margin-bottom: 8px;">🎟️ Invite a friend</h2>
+			<p style="color: #555; font-size: 14px; margin-bottom: 12px;">
+				Generate a single-use invite link to share with someone you trust.
+			</p>
+			<button type="button" id="inviteBtn" class="btn-secondary" style="width: 100%;">Generate invite link</button>
+			<div id="inviteResult" style="display: none; margin-top: 12px; padding: 10px; background: #f1f3f5; border-radius: 4px; font-family: monospace; font-size: 13px; word-break: break-all;"></div>
+		</div>
 	</div>
 
 	<script>
@@ -893,6 +1085,13 @@ app.get("/setup", async (c) => {
 		const testBtn = document.getElementById('testBtn');
 		const deleteBtn = document.getElementById('deleteBtn');
 		const message = document.getElementById('message');
+		const inviteBtn = document.getElementById('inviteBtn');
+		const inviteResult = document.getElementById('inviteResult');
+		const mcpUrlEl = document.getElementById('mcpUrl');
+
+		if (mcpUrlEl) {
+			mcpUrlEl.textContent = window.location.origin + '/mcp';
+		}
 
 		function showMessage(text, type) {
 			message.textContent = text;
@@ -999,10 +1198,36 @@ app.get("/setup", async (c) => {
 			}
 		}
 
+		async function generateInvite() {
+			inviteBtn.disabled = true;
+			const original = inviteBtn.textContent;
+			inviteBtn.innerHTML = 'Generating...<span class="spinner"></span>';
+			try {
+				const response = await fetch('/api/create-invite', { method: 'POST' });
+				const data = await response.json();
+				if (response.ok && data.url) {
+					inviteResult.textContent = data.url;
+					inviteResult.style.display = 'block';
+					try { await navigator.clipboard.writeText(data.url); } catch (e) {}
+					showMessage('✅ Invite link generated and copied to clipboard', 'success');
+				} else {
+					showMessage('❌ ' + (data.error || 'Failed to generate invite'), 'error');
+				}
+			} catch (error) {
+				showMessage('❌ Failed to generate invite: ' + error.message, 'error');
+			} finally {
+				inviteBtn.disabled = false;
+				inviteBtn.textContent = original;
+			}
+		}
+
 		testBtn.addEventListener('click', testApiKey);
 		form.addEventListener('submit', saveApiKey);
 		if (deleteBtn) {
 			deleteBtn.addEventListener('click', deleteApiKey);
+		}
+		if (inviteBtn) {
+			inviteBtn.addEventListener('click', generateInvite);
 		}
 	</script>
 </body>

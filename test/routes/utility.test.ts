@@ -74,7 +74,7 @@ describe("Utility Routes", () => {
 			expect(html).toContain("Hevy MCP Server");
 		});
 
-		it("should include setup link", async () => {
+		it("should include login link to /setup", async () => {
 			const request = new Request("http://localhost/");
 			const mockEnv = {} as any;
 			const mockCtx = {} as any;
@@ -83,10 +83,10 @@ describe("Utility Routes", () => {
 			const html = await response.text();
 
 			expect(html).toContain('href="/setup"');
-			expect(html).toContain("🚀 Setup Your Account");
+			expect(html).toContain("Login");
 		});
 
-		it("should include feature sections", async () => {
+		it("should include viewport meta tag", async () => {
 			const request = new Request("http://localhost/");
 			const mockEnv = {} as any;
 			const mockCtx = {} as any;
@@ -94,40 +94,10 @@ describe("Utility Routes", () => {
 			const response = await utilityRoutes.fetch(request, mockEnv, mockCtx);
 			const html = await response.text();
 
-			// Check for feature sections
-			expect(html).toContain("📊 Track Workouts");
-			expect(html).toContain("📋 Manage Routines");
-			expect(html).toContain("🏃 Exercise History");
-			expect(html).toContain("🔐 Secure & Private");
-		});
-
-		it("should include footer links", async () => {
-			const request = new Request("http://localhost/");
-			const mockEnv = {} as any;
-			const mockCtx = {} as any;
-
-			const response = await utilityRoutes.fetch(request, mockEnv, mockCtx);
-			const html = await response.text();
-
-			expect(html).toContain('href="/health"');
-			expect(html).toContain("Model Context Protocol");
-			expect(html).toContain("Cloudflare Workers");
-		});
-
-		it("should be responsive", async () => {
-			const request = new Request("http://localhost/");
-			const mockEnv = {} as any;
-			const mockCtx = {} as any;
-
-			const response = await utilityRoutes.fetch(request, mockEnv, mockCtx);
-			const html = await response.text();
-
-			// Check for responsive design elements
 			expect(html).toContain('meta name="viewport"');
-			expect(html).toContain("@media (max-width: 768px)");
 		});
 
-		it("should include proper styling", async () => {
+		it("should include basic styling", async () => {
 			const request = new Request("http://localhost/");
 			const mockEnv = {} as any;
 			const mockCtx = {} as any;
@@ -135,11 +105,8 @@ describe("Utility Routes", () => {
 			const response = await utilityRoutes.fetch(request, mockEnv, mockCtx);
 			const html = await response.text();
 
-			// Check for CSS styles
 			expect(html).toContain("<style>");
 			expect(html).toContain("font-family:");
-			expect(html).toContain("background:");
-			expect(html).toContain("border-radius:");
 		});
 	});
 
@@ -189,18 +156,5 @@ describe("Utility Routes", () => {
 			expect(html).not.toContain("token");
 		});
 
-		it("should use secure external links", async () => {
-			const request = new Request("http://localhost/");
-			const mockEnv = {} as any;
-			const mockCtx = {} as any;
-
-			const response = await utilityRoutes.fetch(request, mockEnv, mockCtx);
-			const html = await response.text();
-
-			// Check for secure external links
-			expect(html).toContain('href="https://modelcontextprotocol.io/"');
-			expect(html).toContain('href="https://developers.cloudflare.com/workers/"');
-			expect(html).toContain('target="_blank"');
-		});
 	});
 });

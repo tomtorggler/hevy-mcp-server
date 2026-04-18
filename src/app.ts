@@ -13,6 +13,9 @@ interface Env {
 	GITHUB_CLIENT_ID: string;
 	GITHUB_CLIENT_SECRET: string;
 	COOKIE_ENCRYPTION_KEY: string;
+	// Optional bootstrap invite code (always valid). Use to log in when no
+	// existing session exists. Set via `wrangler secret put ADMIN_INVITE_CODE`.
+	ADMIN_INVITE_CODE?: string;
 	// Legacy: HEVY_API_KEY is deprecated in favor of per-user keys in KV
 	HEVY_API_KEY?: string;
 }
