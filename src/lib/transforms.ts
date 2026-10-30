@@ -20,7 +20,7 @@ export class ValidationError extends Error {
 export function validatePagination(
 	page: number,
 	pageSize: number,
-	maxPageSize: number
+	maxPageSize: number,
 ): void {
 	if (page < 1) {
 		throw new ValidationError(`Page must be 1 or greater, got ${page}`);
@@ -32,7 +32,7 @@ export function validatePagination(
 
 	if (pageSize > maxPageSize) {
 		throw new ValidationError(
-			`Page size cannot exceed ${maxPageSize}, got ${pageSize}`
+			`Page size cannot exceed ${maxPageSize}, got ${pageSize}`,
 		);
 	}
 }
@@ -49,7 +49,7 @@ export function validateUUID(id: string, fieldName: string): void {
 
 	if (!uuidPattern.test(id)) {
 		throw new ValidationError(
-			`${fieldName} must be a valid UUID (e.g., b459cba5-cd6d-463c-abd6-54f8eafcadcb), got ${id}`
+			`${fieldName} must be a valid UUID (e.g., b459cba5-cd6d-463c-abd6-54f8eafcadcb), got ${id}`,
 		);
 	}
 }
@@ -62,7 +62,7 @@ export function validateUUID(id: string, fieldName: string): void {
  */
 export function validateISO8601Date(
 	dateString: string,
-	fieldName: string
+	fieldName: string,
 ): void {
 	// ISO 8601 regex pattern (supports various formats)
 	const iso8601Pattern =
@@ -70,7 +70,7 @@ export function validateISO8601Date(
 
 	if (!iso8601Pattern.test(dateString)) {
 		throw new ValidationError(
-			`${fieldName} must be in ISO 8601 format (e.g., 2024-01-15T10:00:00Z), got ${dateString}`
+			`${fieldName} must be in ISO 8601 format (e.g., 2024-01-15T10:00:00Z), got ${dateString}`,
 		);
 	}
 
@@ -78,7 +78,7 @@ export function validateISO8601Date(
 	const date = new Date(dateString);
 	if (Number.isNaN(date.getTime())) {
 		throw new ValidationError(
-			`${fieldName} is not a valid date: ${dateString}`
+			`${fieldName} is not a valid date: ${dateString}`,
 		);
 	}
 }
@@ -93,7 +93,7 @@ export function validateRPE(rpe: number): void {
 
 	if (!validRPEValues.includes(rpe)) {
 		throw new ValidationError(
-			`RPE must be one of: ${validRPEValues.join(", ")}. Got ${rpe}`
+			`RPE must be one of: ${validRPEValues.join(", ")}. Got ${rpe}`,
 		);
 	}
 }
@@ -117,26 +117,26 @@ export function validateWorkoutExercises(exercises: any[]): void {
 		// Validate required fields
 		if (!exercise.title) {
 			throw new ValidationError(
-				`Exercise at index ${index} is missing required field: title`
+				`Exercise at index ${index} is missing required field: title`,
 			);
 		}
 
 		if (!exercise.exercise_template_id) {
 			throw new ValidationError(
-				`Exercise at index ${index} is missing required field: exercise_template_id`
+				`Exercise at index ${index} is missing required field: exercise_template_id`,
 			);
 		}
 
 		// Validate sets
 		if (!Array.isArray(exercise.sets)) {
 			throw new ValidationError(
-				`Exercise at index ${index} must have a sets array`
+				`Exercise at index ${index} must have a sets array`,
 			);
 		}
 
 		if (exercise.sets.length === 0) {
 			throw new ValidationError(
-				`Exercise at index ${index} must have at least one set`
+				`Exercise at index ${index} must have at least one set`,
 			);
 		}
 
@@ -145,7 +145,7 @@ export function validateWorkoutExercises(exercises: any[]): void {
 			// Validate set type is present
 			if (!set.type) {
 				throw new ValidationError(
-					`Exercise ${index}, Set ${setIndex}: type is required`
+					`Exercise ${index}, Set ${setIndex}: type is required`,
 				);
 			}
 
@@ -153,7 +153,7 @@ export function validateWorkoutExercises(exercises: any[]): void {
 			const validSetTypes = ["warmup", "normal", "failure", "dropset"];
 			if (!validSetTypes.includes(set.type)) {
 				throw new ValidationError(
-					`Exercise ${index}, Set ${setIndex}: Invalid set type "${set.type}". Must be one of: ${validSetTypes.join(", ")}`
+					`Exercise ${index}, Set ${setIndex}: Invalid set type "${set.type}". Must be one of: ${validSetTypes.join(", ")}`,
 				);
 			}
 
@@ -163,7 +163,7 @@ export function validateWorkoutExercises(exercises: any[]): void {
 					validateRPE(set.rpe);
 				} catch (error) {
 					throw new ValidationError(
-						`Exercise ${index}, Set ${setIndex}: ${error instanceof Error ? error.message : "Invalid RPE"}`
+						`Exercise ${index}, Set ${setIndex}: ${error instanceof Error ? error.message : "Invalid RPE"}`,
 					);
 				}
 			}
@@ -177,13 +177,9 @@ export function validateWorkoutExercises(exercises: any[]): void {
 				"custom_metric",
 			];
 			for (const field of numericFields) {
-				if (
-					set[field] !== null &&
-					set[field] !== undefined &&
-					set[field] < 0
-				) {
+				if (set[field] !== null && set[field] !== undefined && set[field] < 0) {
 					throw new ValidationError(
-						`Exercise ${index}, Set ${setIndex}: ${field} cannot be negative`
+						`Exercise ${index}, Set ${setIndex}: ${field} cannot be negative`,
 					);
 				}
 			}
@@ -209,18 +205,15 @@ export function validateRoutineExercises(exercises: any[]): void {
 		// Validate required fields
 		if (!exercise.exercise_template_id) {
 			throw new ValidationError(
-				`Exercise at index ${index} is missing required field: exercise_template_id`
+				`Exercise at index ${index} is missing required field: exercise_template_id`,
 			);
 		}
 
 		// Validate rest_seconds if present
-		if (
-			exercise.rest_seconds !== null &&
-			exercise.rest_seconds !== undefined
-		) {
+		if (exercise.rest_seconds !== null && exercise.rest_seconds !== undefined) {
 			if (exercise.rest_seconds < 0) {
 				throw new ValidationError(
-					`Exercise at index ${index}: rest_seconds cannot be negative`
+					`Exercise at index ${index}: rest_seconds cannot be negative`,
 				);
 			}
 		}
@@ -228,13 +221,13 @@ export function validateRoutineExercises(exercises: any[]): void {
 		// Validate sets
 		if (!Array.isArray(exercise.sets)) {
 			throw new ValidationError(
-				`Exercise at index ${index} must have a sets array`
+				`Exercise at index ${index} must have a sets array`,
 			);
 		}
 
 		if (exercise.sets.length === 0) {
 			throw new ValidationError(
-				`Exercise at index ${index} must have at least one set`
+				`Exercise at index ${index} must have at least one set`,
 			);
 		}
 
@@ -243,7 +236,7 @@ export function validateRoutineExercises(exercises: any[]): void {
 			// Validate set type is present
 			if (!set.type) {
 				throw new ValidationError(
-					`Exercise ${index}, Set ${setIndex}: type is required`
+					`Exercise ${index}, Set ${setIndex}: type is required`,
 				);
 			}
 
@@ -251,7 +244,7 @@ export function validateRoutineExercises(exercises: any[]): void {
 			const validSetTypes = ["warmup", "normal", "failure", "dropset"];
 			if (!validSetTypes.includes(set.type)) {
 				throw new ValidationError(
-					`Exercise ${index}, Set ${setIndex}: Invalid set type "${set.type}". Must be one of: ${validSetTypes.join(", ")}`
+					`Exercise ${index}, Set ${setIndex}: Invalid set type "${set.type}". Must be one of: ${validSetTypes.join(", ")}`,
 				);
 			}
 
@@ -264,13 +257,9 @@ export function validateRoutineExercises(exercises: any[]): void {
 				"custom_metric",
 			];
 			for (const field of numericFields) {
-				if (
-					set[field] !== null &&
-					set[field] !== undefined &&
-					set[field] < 0
-				) {
+				if (set[field] !== null && set[field] !== undefined && set[field] < 0) {
 					throw new ValidationError(
-						`Exercise ${index}, Set ${setIndex}: ${field} cannot be negative`
+						`Exercise ${index}, Set ${setIndex}: ${field} cannot be negative`,
 					);
 				}
 			}
@@ -283,7 +272,7 @@ export function validateRoutineExercises(exercises: any[]): void {
 					set.rep_range.start < 0
 				) {
 					throw new ValidationError(
-						`Exercise ${index}, Set ${setIndex}: rep_range.start cannot be negative`
+						`Exercise ${index}, Set ${setIndex}: rep_range.start cannot be negative`,
 					);
 				}
 				if (
@@ -292,7 +281,7 @@ export function validateRoutineExercises(exercises: any[]): void {
 					set.rep_range.end < 0
 				) {
 					throw new ValidationError(
-						`Exercise ${index}, Set ${setIndex}: rep_range.end cannot be negative`
+						`Exercise ${index}, Set ${setIndex}: rep_range.end cannot be negative`,
 					);
 				}
 				if (
@@ -303,7 +292,7 @@ export function validateRoutineExercises(exercises: any[]): void {
 					set.rep_range.start > set.rep_range.end
 				) {
 					throw new ValidationError(
-						`Exercise ${index}, Set ${setIndex}: rep_range.start cannot be greater than rep_range.end`
+						`Exercise ${index}, Set ${setIndex}: rep_range.start cannot be greater than rep_range.end`,
 					);
 				}
 			}
@@ -326,9 +315,7 @@ export function validateWorkoutData(workout: any): void {
 	const endDate = new Date(workout.end_time);
 
 	if (endDate <= startDate) {
-		throw new ValidationError(
-			"end_time must be after start_time"
-		);
+		throw new ValidationError("end_time must be after start_time");
 	}
 
 	// Validate exercises
@@ -357,7 +344,7 @@ export function validateRoutineData(routine: any): void {
 export function validateExerciseTemplate(template: any): void {
 	if (!template.title || template.title.trim() === "") {
 		throw new ValidationError(
-			"Exercise template title is required and cannot be empty"
+			"Exercise template title is required and cannot be empty",
 		);
 	}
 
@@ -383,6 +370,7 @@ export const PAGINATION_LIMITS = {
 	ROUTINE_FOLDERS: 10,
 	WORKOUT_EVENTS: 10,
 	EXERCISE_TEMPLATES: 100,
+	BODY_MEASUREMENTS: 10,
 } as const;
 
 /**
@@ -396,7 +384,7 @@ export const PAGINATION_LIMITS = {
 export function createValidatedPagination(
 	page: number,
 	pageSize: number,
-	maxPageSize: number
+	maxPageSize: number,
 ): { page: number; pageSize: number } {
 	validatePagination(page, pageSize, maxPageSize);
 	return { page, pageSize };

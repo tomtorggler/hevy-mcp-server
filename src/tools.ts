@@ -57,7 +57,7 @@ export const SERVER_INFO = {
 export const SERVER_INSTRUCTIONS = `Tools for the signed-in user's Hevy fitness account.
 - Exercise IDs: look up exercise_template_id values with get_exercise_templates / get_exercise_template before creating or updating workouts and routines. Never guess IDs.
 - Times are ISO 8601 with timezone (e.g. 2025-01-15T10:00:00Z). Weights are kilograms, distances meters, durations seconds.
-- Page sizes are capped: 10 for workouts, routines and folders; 100 for exercise templates. Page numbers start at 1.
+- Page sizes are capped: 10 for workouts, routines, folders and body measurements; 100 for exercise templates. Page numbers start at 1.
 - update_workout and update_routine replace the whole record. Fetch it first, change what is needed, and send back all exercises and sets.
 - Workouts record what happened; routines are templates (they support rep ranges and rest times, not RPE).
 - Body measurements are one entry per calendar date (YYYY-MM-DD); update_body_measurement replaces the whole entry. get_user_info tells you the user's preferred units for presenting numbers.`;
@@ -726,7 +726,7 @@ export function registerHevyTools(
 				"Body weight, body fat and tape measurements the user logged, one entry per date, newest first. Paginated (max 10 per page).",
 			inputSchema: {
 				page: pageParam,
-				page_size: pageSizeParam(10, 10),
+				page_size: pageSizeParam(PAGINATION_LIMITS.BODY_MEASUREMENTS, 10),
 			},
 			annotations: READ_ONLY,
 		},
