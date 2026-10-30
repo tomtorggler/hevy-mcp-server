@@ -29,6 +29,11 @@ function requestWith(authorization?: string) {
 	});
 }
 
+/** KV stub keyed by full key name. */
+function kvWith(records: Record<string, unknown>) {
+	mockKV.get.mockImplementation(async (key: string) => records[key] ?? null);
+}
+
 const MISSING_TOKEN_BODY = {
 	error: "unauthorized",
 	message:
@@ -48,30 +53,60 @@ const INVALID_TOKEN_HEADER = {
 describe("Bearer Auth Middleware", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
+		mockKV.get.mockReset();
 	});
 
 	describe("Valid Authentication", () => {
-		it("passes through with a valid Bearer token and stores props", async () => {
-			const props = {
+		it("resolves a minted access token and stores identity props", async () => {
+			const identity = {
 				login: "testuser",
+				name: "Test User",
+				email: "t@example.com",
 				baseUrl: BASE,
-				accessToken: "access-token",
 			};
-			mockKV.get.mockResolvedValue(props);
+			kvWith({ "token:valid-token": identity });
 
 			const ctx = makeContext(requestWith("Bearer valid-token"));
 			const next = vi.fn();
 
 			await bearerAuth(ctx as any, next);
 
-			expect(mockKV.get).toHaveBeenCalledWith("session:valid-token", "json");
-			expect(ctx.set).toHaveBeenCalledWith("props", props);
+			expect(mockKV.get).toHaveBeenCalledWith("token:valid-token", "json");
+			expect(ctx.set).toHaveBeenCalledWith("props", identity);
 			expect(next).toHaveBeenCalled();
 			expect(ctx.json).not.toHaveBeenCalled();
 		});
 
+		it("accepts legacy session tokens but strips the GitHub access token", async () => {
+			kvWith({
+				"session:legacy-token": {
+					login: "testuser",
+					name: "Test User",
+					email: "t@example.com",
+					accessToken: "gho_secret",
+					baseUrl: BASE,
+				},
+			});
+
+			const ctx = makeContext(requestWith("Bearer legacy-token"));
+			await bearerAuth(ctx as any, vi.fn());
+
+			expect(mockKV.get).toHaveBeenCalledWith("token:legacy-token", "json");
+			expect(mockKV.get).toHaveBeenCalledWith("session:legacy-token", "json");
+			const props = ctx.set.mock.calls[0][1];
+			expect(props).toEqual({
+				login: "testuser",
+				name: "Test User",
+				email: "t@example.com",
+				baseUrl: BASE,
+			});
+			expect(props).not.toHaveProperty("accessToken");
+		});
+
 		it("accepts tokens with dashes and underscores", async () => {
-			mockKV.get.mockResolvedValue({ login: "testuser" });
+			kvWith({
+				"token:token-with-dashes-and_underscores": { login: "testuser" },
+			});
 			const ctx = makeContext(
 				requestWith("Bearer token-with-dashes-and_underscores"),
 			);
@@ -79,18 +114,18 @@ describe("Bearer Auth Middleware", () => {
 			await bearerAuth(ctx as any, vi.fn());
 
 			expect(mockKV.get).toHaveBeenCalledWith(
-				"session:token-with-dashes-and_underscores",
+				"token:token-with-dashes-and_underscores",
 				"json",
 			);
 		});
 
 		it("treats the Bearer scheme case-insensitively", async () => {
-			mockKV.get.mockResolvedValue({ login: "testuser" });
+			kvWith({ "token:abc123": { login: "testuser" } });
 			const ctx = makeContext(requestWith("bearer abc123"));
 
 			await bearerAuth(ctx as any, vi.fn());
 
-			expect(mockKV.get).toHaveBeenCalledWith("session:abc123", "json");
+			expect(mockKV.get).toHaveBeenCalledWith("token:abc123", "json");
 		});
 	});
 
@@ -129,14 +164,13 @@ describe("Bearer Auth Middleware", () => {
 	});
 
 	describe("Invalid tokens", () => {
-		it("returns 401 invalid_token when the session does not exist", async () => {
-			mockKV.get.mockResolvedValue(null);
+		it("returns 401 invalid_token when neither record exists", async () => {
+			kvWith({});
 			const ctx = makeContext(requestWith("Bearer invalid-token"));
 			const next = vi.fn();
 
 			await bearerAuth(ctx as any, next);
 
-			expect(mockKV.get).toHaveBeenCalledWith("session:invalid-token", "json");
 			expect(ctx.json).toHaveBeenCalledWith(
 				INVALID_TOKEN_BODY,
 				401,
@@ -145,9 +179,9 @@ describe("Bearer Auth Middleware", () => {
 			expect(next).not.toHaveBeenCalled();
 		});
 
-		it("returns 401 invalid_token when the session data is not an object", async () => {
-			mockKV.get.mockResolvedValue("invalid-session-data");
-			const ctx = makeContext(requestWith("Bearer invalid-token"));
+		it("returns 401 invalid_token when the record has no login", async () => {
+			kvWith({ "token:odd": "invalid-session-data" });
+			const ctx = makeContext(requestWith("Bearer odd"));
 
 			await bearerAuth(ctx as any, vi.fn());
 

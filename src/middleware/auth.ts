@@ -12,6 +12,39 @@ interface Variables {
 
 const REQUIRED_SCOPE = "mcp";
 
+function isIdentity(value: unknown): value is Props & Record<string, unknown> {
+	return (
+		typeof value === "object" &&
+		value !== null &&
+		typeof (value as { login?: unknown }).login === "string"
+	);
+}
+
+/**
+ * Resolve a bearer token to the identity it was issued for.
+ *
+ * Tokens minted by /token live under `token:` and carry identity only. Before
+ * 3.2.0 the browser session token doubled as the access token, so `session:`
+ * records are accepted as a fallback until those 30-day tokens expire; the
+ * GitHub access token they contain is dropped before anything downstream sees it.
+ */
+async function lookupToken(
+	kv: KVNamespace,
+	token: string,
+): Promise<Props | null> {
+	const record =
+		(await kv.get(`token:${token}`, "json")) ??
+		(await kv.get(`session:${token}`, "json"));
+	if (!isIdentity(record)) return null;
+
+	return {
+		login: record.login,
+		name: typeof record.name === "string" ? record.name : record.login,
+		email: typeof record.email === "string" ? record.email : "",
+		baseUrl: typeof record.baseUrl === "string" ? record.baseUrl : undefined,
+	};
+}
+
 /**
  * Bearer token authentication middleware for the MCP endpoints.
  *
@@ -44,10 +77,9 @@ export const bearerAuth = createMiddleware<{
 		);
 	}
 
-	const token = match[1];
-	const sessionData = await c.env.OAUTH_KV.get(`session:${token}`, "json");
+	const props = await lookupToken(c.env.OAUTH_KV, match[1]);
 
-	if (!sessionData || typeof sessionData !== "object") {
+	if (!props) {
 		return c.json(
 			{
 				error: "unauthorized",
@@ -60,6 +92,6 @@ export const bearerAuth = createMiddleware<{
 		);
 	}
 
-	c.set("props", sessionData as Props);
+	c.set("props", props);
 	await next();
 });

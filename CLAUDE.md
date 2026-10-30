@@ -31,6 +31,7 @@ src/
 ├── mcp-agent.ts         # MyMCP extends McpAgent (Durable Object); loads the user's Hevy key
 ├── mcp-handlers.ts      # MyMCP.serve("/mcp") and legacy MyMCP.serveSSE("/sse")
 ├── tools.ts             # createHevyServer()/registerHevyTools(): all 17 tools, transport-independent
+├── tool-catalog.ts      # TOOL_GROUPS / TOOL_NAMES: the one list of tools (home page + tests derive from it)
 ├── version.ts           # VERSION read from package.json (used by /health, server info, pages)
 ├── utils.ts             # Props type + GitHub OAuth helpers
 ├── workers-oauth-utils.ts # consent form parsing, per-user client approvals in KV
@@ -64,18 +65,20 @@ api.json                 # Snapshot of Hevy's OpenAPI spec (https://api.hevyapp.
 
 | Prefix | Content | TTL |
 | --- | --- | --- |
-| `session:<token>` | `Props` (GitHub login/name/email/token, baseUrl); used for both cookie sessions and MCP bearer tokens | 30 d |
+| `session:<token>` | `BrowserSession` (identity + GitHub access token) behind the `session` cookie | 30 d |
+| `token:<token>` | `Props` (login/name/email/baseUrl only) for MCP bearer tokens minted by `/token`. `bearerAuth` also accepts `session:` records until pre-3.2.0 tokens expire (remove that fallback after 2025-12-01). | 30 d |
 | `hevy_key:<login>` | AES-GCM encrypted Hevy API key | none |
 | `client:<id>` | DCR registration (redirect_uris, client_name, …) | 1 y |
 | `cimd:<url>` | cached Client ID Metadata Document | 1 h |
 | `approval:<login>:<clientId>` | `"true"` once the user approved a client | 1 y |
-| `oauth_state:<state>` | pending authorization request while at GitHub | 10 min |
+| `oauth_state:<state>` | `{kind:"authorize", pending}` for MCP clients or `{kind:"login", returnTo}` for plain web sign-in, while the user is at GitHub | 10 min |
 | `authcode:<code>` | single-use authorization code (+ PKCE challenge) | 10 min |
 
 ### Security invariants (keep these)
 
 - `redirect_uri` must match the client's registration/metadata document before anything is issued or redirected to. Unknown client or mismatched URI → plain 400, never a redirect.
-- PKCE S256 is mandatory for every client except the internal `setup` pseudo-client; `plain` is rejected.
+- PKCE S256 is mandatory for every client, no exceptions; `plain` is rejected. The `/setup` page signs in through its own GitHub round-trip (`oauth_state` kind `login`), not through `/authorize`, so there is no internal OAuth client.
+- MCP access tokens (`token:`) never contain the GitHub access token; only browser sessions (`session:`) do.
 - Authorization codes are deleted on first use, success or failure.
 - Everything interpolated into HTML goes through `escapeHtml` (`src/ui/layout.ts`). The consent page renders attacker-controlled `client_id`, `redirect_uri`, `state` and `client_name`.
 - Hevy API keys are never returned to clients or rendered; only `maskApiKey` output is shown.
@@ -100,7 +103,7 @@ Schema notes:
 
 1. Add the method to `HevyClient` in `src/lib/client.ts`.
 2. Register it in `src/tools.ts` using the local `tool()` helper (handler receives validated args and the user's `HevyClient`; thrown errors are formatted by `handleError`).
-3. Append the name to `TOOL_NAMES` and to `TOOL_GROUPS` in `src/ui/home.ts`.
+3. Add the name to the matching group in `src/tool-catalog.ts` (the home page and `TOOL_NAMES` derive from it).
 4. Add a test in `test/tools.test.ts` (in-memory MCP client) and, for client changes, `test/lib/client.test.ts`.
 5. `npm test && npm run type-check`, then update the README tool table.
 

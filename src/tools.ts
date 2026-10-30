@@ -27,7 +27,6 @@ import {
 } from "./lib/schemas.js";
 import {
 	ValidationError,
-	validatePagination,
 	validateISO8601Date,
 	validateWorkoutData,
 	validateRoutineData,
@@ -35,7 +34,10 @@ import {
 	PAGINATION_LIMITS,
 } from "./lib/transforms.js";
 import { handleError, type McpToolResponse } from "./lib/errors.js";
+import { TOOL_NAMES } from "./tool-catalog.js";
 import { VERSION } from "./version.js";
+
+export { TOOL_NAMES };
 
 /** Resolves the Hevy client for the current user, or throws a user-facing error. */
 export type ClientProvider = () => Promise<HevyClient>;
@@ -52,26 +54,6 @@ export const SERVER_INSTRUCTIONS = `Tools for the signed-in user's Hevy fitness 
 - Page sizes are capped: 10 for workouts, routines and folders; 100 for exercise templates. Page numbers start at 1.
 - update_workout and update_routine replace the whole record. Fetch it first, change what is needed, and send back all exercises and sets.
 - Workouts record what happened; routines are templates (they support rep ranges and rest times, not RPE).`;
-
-export const TOOL_NAMES = [
-	"get_workouts",
-	"get_workout",
-	"create_workout",
-	"update_workout",
-	"get_workouts_count",
-	"get_workout_events",
-	"get_routines",
-	"get_routine",
-	"create_routine",
-	"update_routine",
-	"get_exercise_templates",
-	"get_exercise_template",
-	"create_exercise_template",
-	"get_exercise_history",
-	"get_routine_folders",
-	"get_routine_folder",
-	"create_routine_folder",
-] as const;
 
 const READ_ONLY: ToolAnnotations = {
 	readOnlyHint: true,
@@ -92,6 +74,8 @@ const REPLACES: ToolAnnotations = {
 	openWorldHint: false,
 };
 
+// Pagination limits are enforced by the schema (min/max), so handlers need no
+// second check; the SDK rejects out-of-range arguments before they run.
 const pageParam = z
 	.number()
 	.int()
@@ -182,7 +166,6 @@ export function registerHevyTools(
 			annotations: READ_ONLY,
 		},
 		async ({ page, page_size }, client) => {
-			validatePagination(page, page_size, PAGINATION_LIMITS.WORKOUTS);
 			const workouts = await client.getWorkouts({ page, pageSize: page_size });
 
 			const summary =
@@ -315,11 +298,6 @@ export function registerHevyTools(
 			annotations: READ_ONLY,
 		},
 		async (args, client) => {
-			validatePagination(
-				args.page,
-				args.page_size,
-				PAGINATION_LIMITS.WORKOUT_EVENTS,
-			);
 			if (args.since) validateISO8601Date(args.since, "since");
 
 			const params: { page: number; pageSize: number; since?: string } = {
@@ -367,7 +345,6 @@ export function registerHevyTools(
 			annotations: READ_ONLY,
 		},
 		async ({ page, page_size }, client) => {
-			validatePagination(page, page_size, PAGINATION_LIMITS.ROUTINES);
 			const routines = await client.getRoutines({ page, pageSize: page_size });
 
 			const summary =
@@ -486,7 +463,6 @@ export function registerHevyTools(
 			annotations: READ_ONLY,
 		},
 		async ({ page, page_size }, client) => {
-			validatePagination(page, page_size, PAGINATION_LIMITS.EXERCISE_TEMPLATES);
 			const templates = await client.getExerciseTemplates({
 				page,
 				pageSize: page_size,
@@ -644,7 +620,6 @@ export function registerHevyTools(
 			annotations: READ_ONLY,
 		},
 		async ({ page, page_size }, client) => {
-			validatePagination(page, page_size, PAGINATION_LIMITS.ROUTINE_FOLDERS);
 			const folders = await client.getRoutineFolders({
 				page,
 				pageSize: page_size,

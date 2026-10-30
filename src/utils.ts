@@ -4,15 +4,22 @@
  */
 
 /**
- * Props type that holds user information from GitHub OAuth
- * Note: Hevy API keys are stored separately in KV and fetched as needed
+ * Identity carried on MCP access tokens and into the Durable Object.
+ * Note: Hevy API keys are stored separately in KV and fetched as needed.
  */
 export type Props = {
 	login: string; // GitHub username
 	name: string; // GitHub display name
 	email: string; // GitHub email
-	accessToken: string; // GitHub access token
 	baseUrl?: string; // Base URL of the worker (for generating setup links)
+};
+
+/**
+ * Browser session: identity plus the upstream GitHub token. Lives behind the
+ * session cookie only and is never handed to MCP clients.
+ */
+export type BrowserSession = Props & {
+	accessToken: string; // GitHub access token
 };
 
 /**
@@ -22,7 +29,7 @@ export function getUpstreamAuthorizeUrl(
 	clientId: string,
 	redirectUri: string,
 	state: string,
-	scope = "user:email"
+	scope = "user:email",
 ): string {
 	const params = new URLSearchParams({
 		client_id: clientId,
@@ -42,7 +49,7 @@ export async function fetchUpstreamAuthToken(
 	code: string,
 	clientId: string,
 	clientSecret: string,
-	redirectUri: string
+	redirectUri: string,
 ): Promise<string> {
 	const response = await fetch("https://github.com/login/oauth/access_token", {
 		method: "POST",
@@ -69,7 +76,9 @@ export async function fetchUpstreamAuthToken(
 	};
 
 	if (data.error) {
-		throw new Error(`GitHub OAuth error: ${data.error_description || data.error}`);
+		throw new Error(
+			`GitHub OAuth error: ${data.error_description || data.error}`,
+		);
 	}
 
 	if (!data.access_token) {
@@ -83,7 +92,7 @@ export async function fetchUpstreamAuthToken(
  * Fetches user information from GitHub API
  */
 export async function fetchGitHubUser(
-	accessToken: string
+	accessToken: string,
 ): Promise<{ login: string; name: string; email: string }> {
 	const response = await fetch("https://api.github.com/user", {
 		headers: {
@@ -131,4 +140,3 @@ export async function fetchGitHubUser(
 		email: email || "",
 	};
 }
-

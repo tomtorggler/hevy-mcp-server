@@ -4,12 +4,8 @@ import {
 	isRedirectUriAllowed,
 	resolveClient,
 	validateRedirectUris,
-	setupRedirectUri,
-	SETUP_CLIENT_ID,
 } from "../../src/lib/oauth-clients.js";
 import { createMemoryKV } from "../helpers/memory-kv.js";
-
-const BASE = "https://hevy.example.com";
 
 describe("isRedirectUriAllowed", () => {
 	const allowed = [
@@ -110,20 +106,6 @@ describe("resolveClient", () => {
 		fetchFn.mockReset();
 	});
 
-	it("resolves the built-in setup client to the setup page redirect", async () => {
-		const client = await resolveClient(
-			kv as any,
-			SETUP_CLIENT_ID,
-			BASE,
-			fetchFn,
-		);
-		expect(client).toMatchObject({
-			source: "setup",
-			redirectUris: [setupRedirectUri(BASE)],
-		});
-		expect(fetchFn).not.toHaveBeenCalled();
-	});
-
 	it("resolves a dynamically registered client from KV", async () => {
 		await kv.put(
 			"client:abc",
@@ -135,7 +117,7 @@ describe("resolveClient", () => {
 			}),
 		);
 
-		const client = await resolveClient(kv as any, "abc", BASE, fetchFn);
+		const client = await resolveClient(kv as any, "abc", fetchFn);
 		expect(client).toEqual({
 			clientId: "abc",
 			clientName: "Test Client",
@@ -145,8 +127,9 @@ describe("resolveClient", () => {
 		});
 	});
 
-	it("returns null for unknown opaque client IDs", async () => {
-		expect(await resolveClient(kv as any, "nope", BASE, fetchFn)).toBeNull();
+	it("returns null for unknown opaque client IDs, including the old setup pseudo-client", async () => {
+		expect(await resolveClient(kv as any, "nope", fetchFn)).toBeNull();
+		expect(await resolveClient(kv as any, "setup", fetchFn)).toBeNull();
 		expect(fetchFn).not.toHaveBeenCalled();
 	});
 
@@ -171,7 +154,7 @@ describe("resolveClient", () => {
 		it("fetches, validates and caches the document", async () => {
 			respondWith(document);
 
-			const client = await resolveClient(kv as any, clientId, BASE, fetchFn);
+			const client = await resolveClient(kv as any, clientId, fetchFn);
 			expect(client).toEqual({
 				clientId,
 				clientName: "Example Client",
@@ -184,7 +167,7 @@ describe("resolveClient", () => {
 			expect(fetchFn.mock.calls[0][1]).toMatchObject({ redirect: "error" });
 
 			// Second resolution is served from the KV cache
-			await resolveClient(kv as any, clientId, BASE, fetchFn);
+			await resolveClient(kv as any, clientId, fetchFn);
 			expect(fetchFn).toHaveBeenCalledTimes(1);
 		});
 
@@ -193,28 +176,20 @@ describe("resolveClient", () => {
 				...document,
 				client_id: "https://other.example/client.json",
 			});
-			expect(
-				await resolveClient(kv as any, clientId, BASE, fetchFn),
-			).toBeNull();
+			expect(await resolveClient(kv as any, clientId, fetchFn)).toBeNull();
 		});
 
 		it("rejects a document without redirect_uris", async () => {
 			respondWith({ client_id: clientId, client_name: "x" });
-			expect(
-				await resolveClient(kv as any, clientId, BASE, fetchFn),
-			).toBeNull();
+			expect(await resolveClient(kv as any, clientId, fetchFn)).toBeNull();
 		});
 
 		it("rejects non-JSON and non-2xx responses", async () => {
 			respondWith("<html>nope</html>");
-			expect(
-				await resolveClient(kv as any, clientId, BASE, fetchFn),
-			).toBeNull();
+			expect(await resolveClient(kv as any, clientId, fetchFn)).toBeNull();
 
 			respondWith(document, 404);
-			expect(
-				await resolveClient(kv as any, clientId, BASE, fetchFn),
-			).toBeNull();
+			expect(await resolveClient(kv as any, clientId, fetchFn)).toBeNull();
 		});
 
 		it("falls back to the hostname when client_name is missing", async () => {
@@ -222,7 +197,7 @@ describe("resolveClient", () => {
 				client_id: clientId,
 				redirect_uris: document.redirect_uris,
 			});
-			const client = await resolveClient(kv as any, clientId, BASE, fetchFn);
+			const client = await resolveClient(kv as any, clientId, fetchFn);
 			expect(client?.clientName).toBe("client.example");
 		});
 
@@ -231,12 +206,11 @@ describe("resolveClient", () => {
 				await resolveClient(
 					kv as any,
 					"http://client.example/client.json",
-					BASE,
 					fetchFn,
 				),
 			).toBeNull();
 			expect(
-				await resolveClient(kv as any, "https://client.example", BASE, fetchFn),
+				await resolveClient(kv as any, "https://client.example", fetchFn),
 			).toBeNull();
 			expect(fetchFn).not.toHaveBeenCalled();
 		});

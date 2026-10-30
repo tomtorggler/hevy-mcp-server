@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import githubHandler from "../../src/github-handler.js";
 import { computeCodeChallenge } from "../../src/lib/pkce.js";
 import { createMemoryKV, type MemoryKV } from "../helpers/memory-kv.js";
@@ -48,6 +48,26 @@ function authorizeQuery(params: Record<string, string>) {
 	return `/authorize?${new URLSearchParams(params).toString()}`;
 }
 
+function stateKeys() {
+	return Array.from(kv.store.keys()).filter((k) =>
+		k.startsWith("oauth_state:"),
+	);
+}
+
+/** Mock the two GitHub calls made by /callback. */
+function mockGitHub(
+	user = { login: "octocat", name: "The Octocat", email: "o@example.com" },
+) {
+	const json = (data: unknown) =>
+		new Response(JSON.stringify(data), {
+			status: 200,
+			headers: { "Content-Type": "application/json" },
+		});
+	(global.fetch as any)
+		.mockResolvedValueOnce(json({ access_token: "gho_test" }))
+		.mockResolvedValueOnce(json(user));
+}
+
 describe("OAuth authorization server", () => {
 	beforeEach(() => {
 		kv = createMemoryKV();
@@ -57,6 +77,7 @@ describe("OAuth authorization server", () => {
 			GITHUB_CLIENT_SECRET: "gh-secret",
 			COOKIE_ENCRYPTION_KEY: "00".repeat(32),
 		};
+		(global.fetch as any).mockReset();
 	});
 
 	describe("discovery metadata", () => {
@@ -161,6 +182,18 @@ describe("OAuth authorization server", () => {
 			expect(response.headers.get("Location")).toBeNull();
 		});
 
+		it("no longer recognises the former setup pseudo-client", async () => {
+			const response = await call(
+				authorizeQuery({
+					client_id: "setup",
+					redirect_uri: `${BASE}/setup`,
+					state: "setup",
+				}),
+			);
+			expect(response.status).toBe(400);
+			expect(response.headers.get("Location")).toBeNull();
+		});
+
 		it("rejects redirect URIs that are not registered for the client, without redirecting", async () => {
 			const response = await call(
 				authorizeQuery({
@@ -176,7 +209,7 @@ describe("OAuth authorization server", () => {
 			expect(await response.text()).toContain("redirect_uri is not registered");
 		});
 
-		it("requires PKCE and reports the error to the validated redirect URI", async () => {
+		it("requires PKCE for every client and reports the error to the validated redirect URI", async () => {
 			const response = await call(
 				authorizeQuery({
 					client_id: clientId,
@@ -226,16 +259,16 @@ describe("OAuth authorization server", () => {
 				`${BASE}/callback`,
 			);
 
-			const stateKey = Array.from(kv.store.keys()).find((k) =>
-				k.startsWith("oauth_state:"),
-			);
-			expect(stateKey).toBeDefined();
-			expect(await kv.get(stateKey!, "json")).toMatchObject({
-				clientId,
-				redirectUri: "https://client.example/callback",
-				state: "client-state",
-				codeChallenge: challenge,
-				codeChallengeMethod: "S256",
+			expect(stateKeys()).toHaveLength(1);
+			expect(await kv.get(stateKeys()[0], "json")).toMatchObject({
+				kind: "authorize",
+				pending: {
+					clientId,
+					redirectUri: "https://client.example/callback",
+					state: "client-state",
+					codeChallenge: challenge,
+					codeChallengeMethod: "S256",
+				},
 			});
 		});
 
@@ -314,50 +347,71 @@ describe("OAuth authorization server", () => {
 	});
 
 	describe("POST /authorize (consent form)", () => {
-		it("re-validates the redirect URI from the form", async () => {
-			const token = await seedSession();
-			const clientId = (await registerClient()).body.client_id;
-			const form = new URLSearchParams({
-				approve: "true",
-				client_id: clientId,
-				redirect_uri: "https://evil.example/steal",
-				state: "s",
-				scope: "mcp",
-				code_challenge: await computeCodeChallenge(VERIFIER),
-				code_challenge_method: "S256",
-			});
-			const response = await call("/authorize", {
+		async function submit(fields: Record<string, string>, token: string) {
+			return call("/authorize", {
 				method: "POST",
 				headers: {
 					"Content-Type": "application/x-www-form-urlencoded",
 					Cookie: `session=${token}`,
 				},
-				body: form.toString(),
+				body: new URLSearchParams(fields).toString(),
 			});
+		}
+
+		it("re-validates the redirect URI from the form", async () => {
+			const token = await seedSession();
+			const clientId = (await registerClient()).body.client_id;
+			const response = await submit(
+				{
+					approve: "true",
+					client_id: clientId,
+					redirect_uri: "https://evil.example/steal",
+					state: "s",
+					scope: "mcp",
+					code_challenge: await computeCodeChallenge(VERIFIER),
+					code_challenge_method: "S256",
+				},
+				token,
+			);
 			expect(response.status).toBe(400);
 			expect(response.headers.get("Location")).toBeNull();
+		});
+
+		it("requires PKCE on the form too", async () => {
+			const token = await seedSession();
+			const clientId = (await registerClient()).body.client_id;
+			const response = await submit(
+				{
+					approve: "true",
+					client_id: clientId,
+					redirect_uri: "https://client.example/callback",
+					state: "s",
+					scope: "mcp",
+				},
+				token,
+			);
+			expect(response.status).toBe(302);
+			expect(
+				new URL(response.headers.get("Location")!).searchParams.get("error"),
+			).toBe("invalid_request");
+			expect(await kv.get(`approval:octocat:${clientId}`)).toBeNull();
 		});
 
 		it("redirects with access_denied when the user denies", async () => {
 			const token = await seedSession();
 			const clientId = (await registerClient()).body.client_id;
-			const form = new URLSearchParams({
-				approve: "false",
-				client_id: clientId,
-				redirect_uri: "https://client.example/callback",
-				state: "s",
-				scope: "mcp",
-				code_challenge: await computeCodeChallenge(VERIFIER),
-				code_challenge_method: "S256",
-			});
-			const response = await call("/authorize", {
-				method: "POST",
-				headers: {
-					"Content-Type": "application/x-www-form-urlencoded",
-					Cookie: `session=${token}`,
+			const response = await submit(
+				{
+					approve: "false",
+					client_id: clientId,
+					redirect_uri: "https://client.example/callback",
+					state: "s",
+					scope: "mcp",
+					code_challenge: await computeCodeChallenge(VERIFIER),
+					code_challenge_method: "S256",
 				},
-				body: form.toString(),
-			});
+				token,
+			);
 			expect(response.status).toBe(302);
 			const location = new URL(response.headers.get("Location")!);
 			expect(location.searchParams.get("error")).toBe("access_denied");
@@ -367,28 +421,99 @@ describe("OAuth authorization server", () => {
 		it("records approval and issues a code when the user approves", async () => {
 			const token = await seedSession();
 			const clientId = (await registerClient()).body.client_id;
-			const form = new URLSearchParams({
-				approve: "true",
-				client_id: clientId,
-				redirect_uri: "https://client.example/callback",
-				state: "s",
-				scope: "mcp",
-				code_challenge: await computeCodeChallenge(VERIFIER),
-				code_challenge_method: "S256",
-			});
-			const response = await call("/authorize", {
-				method: "POST",
-				headers: {
-					"Content-Type": "application/x-www-form-urlencoded",
-					Cookie: `session=${token}`,
+			const response = await submit(
+				{
+					approve: "true",
+					client_id: clientId,
+					redirect_uri: "https://client.example/callback",
+					state: "s",
+					scope: "mcp",
+					code_challenge: await computeCodeChallenge(VERIFIER),
+					code_challenge_method: "S256",
 				},
-				body: form.toString(),
-			});
+				token,
+			);
 			expect(response.status).toBe(302);
 			expect(
 				new URL(response.headers.get("Location")!).searchParams.get("code"),
 			).toBeTruthy();
 			expect(await kv.get(`approval:octocat:${clientId}`)).toBe("true");
+		});
+	});
+
+	describe("GET /callback", () => {
+		it("rejects unknown or replayed state", async () => {
+			expect((await call("/callback?code=x&state=nope")).status).toBe(400);
+
+			await kv.put(
+				"oauth_state:once",
+				JSON.stringify({ kind: "login", returnTo: "/setup" }),
+			);
+			mockGitHub();
+			expect((await call("/callback?code=x&state=once")).status).toBe(302);
+			expect((await call("/callback?code=x&state=once")).status).toBe(400);
+		});
+
+		it("completes a web sign-in: sets the cookie and returns to the requested page", async () => {
+			await kv.put(
+				"oauth_state:login1",
+				JSON.stringify({ kind: "login", returnTo: "/setup" }),
+			);
+			mockGitHub();
+
+			const response = await call("/callback?code=gh-code&state=login1");
+			expect(response.status).toBe(302);
+			expect(response.headers.get("Location")).toBe("/setup");
+
+			const cookie = response.headers.get("Set-Cookie")!;
+			expect(cookie).toMatch(/^session=[0-9a-f]{64}; /);
+			expect(cookie).toContain("HttpOnly");
+
+			const sessionToken = cookie.match(/^session=([0-9a-f]+)/)![1];
+			expect(await kv.get(`session:${sessionToken}`, "json")).toMatchObject({
+				login: "octocat",
+				accessToken: "gho_test",
+			});
+			// No authorization code is minted for a plain sign-in
+			expect(
+				Array.from(kv.store.keys()).filter((k) => k.startsWith("authcode:")),
+			).toHaveLength(0);
+		});
+
+		it("refuses to follow an off-origin return path", async () => {
+			await kv.put(
+				"oauth_state:login2",
+				JSON.stringify({ kind: "login", returnTo: "//evil.example/x" }),
+			);
+			mockGitHub();
+
+			const response = await call("/callback?code=gh-code&state=login2");
+			expect(response.headers.get("Location")).toBe("/");
+		});
+
+		it("completes an MCP authorization: sets the cookie and shows consent for a new client", async () => {
+			const clientId = (await registerClient()).body.client_id;
+			const challenge = await computeCodeChallenge(VERIFIER);
+			await kv.put(
+				"oauth_state:authz1",
+				JSON.stringify({
+					kind: "authorize",
+					pending: {
+						clientId,
+						redirectUri: "https://client.example/callback",
+						state: "s",
+						scope: "mcp",
+						codeChallenge: challenge,
+						codeChallengeMethod: "S256",
+					},
+				}),
+			);
+			mockGitHub();
+
+			const response = await call("/callback?code=gh-code&state=authz1");
+			expect(response.status).toBe(200);
+			expect(response.headers.get("Set-Cookie")).toMatch(/^session=/);
+			expect(await response.text()).toContain("Test Client");
 		});
 	});
 
@@ -434,7 +559,7 @@ describe("OAuth authorization server", () => {
 			sessionToken = await seedSession();
 		});
 
-		it("exchanges a valid code + verifier for a fresh access token", async () => {
+		it("exchanges a valid code + verifier for an identity-only access token", async () => {
 			await seedCode("good-code");
 			const { response, body } = await exchange({
 				grant_type: "authorization_code",
@@ -453,10 +578,15 @@ describe("OAuth authorization server", () => {
 			});
 			expect(body.access_token).not.toBe(sessionToken);
 
-			// The new token is a standalone session copied from the browser session
-			expect(
-				await kv.get(`session:${body.access_token}`, "json"),
-			).toMatchObject({ login: "octocat" });
+			// Separate prefix, identity only: no GitHub token leaks into the client credential
+			const record = await kv.get(`token:${body.access_token}`, "json");
+			expect(record).toEqual({
+				login: "octocat",
+				name: "The Octocat",
+				email: "o@example.com",
+				baseUrl: BASE,
+			});
+			expect(await kv.get(`session:${body.access_token}`)).toBeNull();
 			// Codes are single use
 			expect(await kv.get("authcode:good-code")).toBeNull();
 		});
@@ -526,7 +656,7 @@ describe("OAuth authorization server", () => {
 			).toBe("invalid_grant");
 		});
 
-		it("rejects codes issued without PKCE for non-setup clients", async () => {
+		it("rejects any code record that lacks a PKCE challenge", async () => {
 			await seedCode("no-pkce", {
 				codeChallenge: undefined,
 				codeChallengeMethod: undefined,
@@ -536,6 +666,7 @@ describe("OAuth authorization server", () => {
 				code: "no-pkce",
 				client_id: clientId,
 				redirect_uri: "https://client.example/callback",
+				code_verifier: VERIFIER,
 			});
 			expect(body.error).toBe("invalid_grant");
 		});
@@ -563,13 +694,20 @@ describe("OAuth authorization server", () => {
 	});
 
 	describe("web UI session routes", () => {
-		it("redirects anonymous visitors of /setup through the setup client", async () => {
+		it("sends anonymous visitors of /setup straight to GitHub with a login state", async () => {
 			const response = await call("/setup");
 			expect(response.status).toBe(302);
 			const location = new URL(response.headers.get("Location")!);
-			expect(location.pathname).toBe("/authorize");
-			expect(location.searchParams.get("client_id")).toBe("setup");
-			expect(location.searchParams.get("redirect_uri")).toBe(`${BASE}/setup`);
+			expect(location.origin).toBe("https://github.com");
+			expect(location.searchParams.get("redirect_uri")).toBe(
+				`${BASE}/callback`,
+			);
+
+			expect(stateKeys()).toHaveLength(1);
+			expect(await kv.get(stateKeys()[0], "json")).toEqual({
+				kind: "login",
+				returnTo: "/setup",
+			});
 		});
 
 		it("renders the setup page for signed-in users", async () => {

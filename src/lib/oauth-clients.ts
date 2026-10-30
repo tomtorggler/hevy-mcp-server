@@ -1,16 +1,13 @@
 /**
  * OAuth client resolution and redirect URI validation.
  *
- * Three kinds of clients are recognised:
- *  - the built-in "setup" pseudo-client used by the /setup page
+ * Two kinds of clients are recognised:
  *  - clients registered via Dynamic Client Registration (stored in KV)
  *  - Client ID Metadata Documents (client_id is an HTTPS URL pointing at a
  *    JSON document; see draft-ietf-oauth-client-id-metadata-document)
  */
 
-export const SETUP_CLIENT_ID = "setup";
-
-export type ClientSource = "setup" | "registered" | "metadata_document";
+export type ClientSource = "registered" | "metadata_document";
 
 export interface ResolvedClient {
 	clientId: string;
@@ -34,11 +31,6 @@ const CIMD_MAX_BYTES = 64 * 1024;
 const CIMD_CACHE_TTL_SECONDS = 60 * 60;
 
 type FetchLike = typeof fetch;
-
-/** Setup page redirect for a given worker base URL. */
-export function setupRedirectUri(baseUrl: string): string {
-	return `${baseUrl}/setup`;
-}
 
 /**
  * A client_id is treated as a Client ID Metadata Document URL when it is an
@@ -189,18 +181,8 @@ function displayNameFromUrl(clientId: string): string {
 export async function resolveClient(
 	kv: KVNamespace,
 	clientId: string,
-	baseUrl: string,
 	fetchFn: FetchLike = fetch,
 ): Promise<ResolvedClient | null> {
-	if (clientId === SETUP_CLIENT_ID) {
-		return {
-			clientId,
-			clientName: "Hevy MCP Server setup",
-			redirectUris: [setupRedirectUri(baseUrl)],
-			source: "setup",
-		};
-	}
-
 	const registered = await kv.get<RegisteredClientRecord>(
 		`client:${clientId}`,
 		"json",

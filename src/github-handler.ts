@@ -12,6 +12,7 @@ import {
 	getUpstreamAuthorizeUrl,
 	fetchUpstreamAuthToken,
 	fetchGitHubUser,
+	type BrowserSession,
 	type Props,
 } from "./utils.js";
 import {
@@ -31,8 +32,6 @@ import {
 	resolveClient,
 	isRedirectUriAllowed,
 	validateRedirectUris,
-	setupRedirectUri,
-	SETUP_CLIENT_ID,
 	type RegisteredClientRecord,
 	type ResolvedClient,
 } from "./lib/oauth-clients.js";
@@ -52,27 +51,33 @@ type AppContext = Context<{ Bindings: Env }>;
 
 const SESSION_COOKIE = "session";
 const SESSION_TTL_SECONDS = 30 * 24 * 60 * 60;
+const ACCESS_TOKEN_TTL_SECONDS = 30 * 24 * 60 * 60;
 const AUTH_CODE_TTL_SECONDS = 10 * 60;
 const OAUTH_STATE_TTL_SECONDS = 10 * 60;
 const CLIENT_REGISTRATION_TTL_SECONDS = 365 * 24 * 60 * 60;
 const DEFAULT_SCOPE = "mcp";
 
-/** What an authorization request looks like once validated. */
+/** A validated OAuth authorization request waiting for user consent. */
 interface PendingAuthorization {
 	clientId: string;
 	redirectUri: string;
 	state: string;
 	scope: string;
-	codeChallenge?: string;
-	codeChallengeMethod?: string;
+	codeChallenge: string;
+	codeChallengeMethod: string;
 }
+
+/** What we stash in KV while the user is at GitHub. */
+type OAuthStateRecord =
+	| { kind: "authorize"; pending: PendingAuthorization }
+	| { kind: "login"; returnTo: string };
 
 interface AuthCodeRecord {
 	clientId: string;
 	redirectUri: string;
 	sessionToken: string;
-	codeChallenge?: string;
-	codeChallengeMethod?: string;
+	codeChallenge: string;
+	codeChallengeMethod: string;
 }
 
 const app = new Hono<{ Bindings: Env }>();
@@ -109,14 +114,42 @@ function clearedSessionCookie(): string {
 
 async function getSession(
 	c: AppContext,
-): Promise<{ token: string; props: Props } | null> {
+): Promise<{ token: string; session: BrowserSession } | null> {
 	const token = getCookie(c, SESSION_COOKIE);
 	if (!token) return null;
 
 	const data = await c.env.OAUTH_KV.get(`session:${token}`, "json");
 	if (!data || typeof data !== "object" || !("login" in data)) return null;
 
-	return { token, props: data as Props };
+	return { token, session: data as BrowserSession };
+}
+
+/** Only same-origin, absolute-path return targets are allowed after login. */
+function isSafeReturnPath(path: string): boolean {
+	return path.startsWith("/") && !path.startsWith("//") && !path.includes("\\");
+}
+
+/** Stash `record` under a fresh state value and send the browser to GitHub. */
+async function beginGitHubLogin(
+	c: AppContext,
+	record: OAuthStateRecord,
+): Promise<Response> {
+	const githubState = randomToken(16);
+	await c.env.OAUTH_KV.put(
+		`oauth_state:${githubState}`,
+		JSON.stringify(record),
+		{ expirationTtl: OAUTH_STATE_TTL_SECONDS },
+	);
+
+	const callbackUri = `${getBaseUrl(c.req)}/callback`;
+	return c.redirect(
+		getUpstreamAuthorizeUrl(
+			c.env.GITHUB_CLIENT_ID,
+			callbackUri,
+			githubState,
+			"user:email",
+		),
+	);
 }
 
 async function issueAuthCode(
@@ -145,15 +178,15 @@ function successRedirect(
 
 /** Build the redirect back to the client (error). Only used after redirect_uri was validated. */
 function errorRedirect(
-	pending: PendingAuthorization,
+	target: { redirectUri: string; state: string },
 	error: string,
 	description: string,
 	issuer: string,
 ): string {
-	const url = new URL(pending.redirectUri);
+	const url = new URL(target.redirectUri);
 	url.searchParams.set("error", error);
 	url.searchParams.set("error_description", description);
-	if (pending.state) url.searchParams.set("state", pending.state);
+	if (target.state) url.searchParams.set("state", target.state);
 	url.searchParams.set("iss", issuer);
 	return url.toString();
 }
@@ -165,7 +198,8 @@ type ValidationResult =
 /**
  * Validate the client_id / redirect_uri pair and PKCE parameters of an
  * authorization request. Errors in client_id or redirect_uri MUST NOT redirect
- * (RFC 6749 §4.1.2.1), so they are returned as plain 400 responses.
+ * (RFC 6749 §4.1.2.1), so they are returned as plain 400 responses. PKCE
+ * errors are reported to the (now validated) redirect URI.
  */
 async function validateAuthorizationRequest(
 	c: AppContext,
@@ -191,7 +225,7 @@ async function validateAuthorizationRequest(
 		};
 	}
 
-	const client = await resolveClient(c.env.OAUTH_KV, clientId, baseUrl);
+	const client = await resolveClient(c.env.OAUTH_KV, clientId);
 	if (!client) {
 		return {
 			ok: false,
@@ -209,54 +243,29 @@ async function validateAuthorizationRequest(
 		};
 	}
 
-	const pending: PendingAuthorization = {
-		clientId,
-		redirectUri,
-		state: params.state ?? "",
-		scope: params.scope || DEFAULT_SCOPE,
-		codeChallenge: params.codeChallenge || undefined,
-		codeChallengeMethod: params.codeChallengeMethod || undefined,
-	};
+	const target = { redirectUri, state: params.state ?? "" };
 
-	// PKCE is mandatory for real OAuth clients (OAuth 2.1 / MCP). The internal
-	// setup pseudo-client is a plain browser redirect and is exempt.
-	if (client.source !== "setup") {
-		if (!pending.codeChallenge) {
-			return {
-				ok: false,
-				response: c.redirect(
-					errorRedirect(
-						pending,
-						"invalid_request",
-						"code_challenge is required (PKCE)",
-						baseUrl,
-					),
-				),
-			};
-		}
-		// RFC 7636: a missing method means "plain", which OAuth 2.1 forbids.
-		if (!isSupportedCodeChallengeMethod(pending.codeChallengeMethod)) {
-			return {
-				ok: false,
-				response: c.redirect(
-					errorRedirect(
-						pending,
-						"invalid_request",
-						"code_challenge_method must be S256",
-						baseUrl,
-					),
-				),
-			};
-		}
-	} else if (
-		pending.codeChallenge &&
-		!isSupportedCodeChallengeMethod(pending.codeChallengeMethod)
-	) {
+	// OAuth 2.1 / MCP: PKCE with S256 is mandatory for every client.
+	if (!params.codeChallenge) {
 		return {
 			ok: false,
 			response: c.redirect(
 				errorRedirect(
-					pending,
+					target,
+					"invalid_request",
+					"code_challenge is required (PKCE)",
+					baseUrl,
+				),
+			),
+		};
+	}
+	// RFC 7636: a missing method means "plain", which OAuth 2.1 forbids.
+	if (!isSupportedCodeChallengeMethod(params.codeChallengeMethod)) {
+		return {
+			ok: false,
+			response: c.redirect(
+				errorRedirect(
+					target,
 					"invalid_request",
 					"code_challenge_method must be S256",
 					baseUrl,
@@ -265,7 +274,18 @@ async function validateAuthorizationRequest(
 		};
 	}
 
-	return { ok: true, client, pending };
+	return {
+		ok: true,
+		client,
+		pending: {
+			clientId,
+			redirectUri,
+			state: target.state,
+			scope: params.scope || DEFAULT_SCOPE,
+			codeChallenge: params.codeChallenge,
+			codeChallengeMethod: params.codeChallengeMethod,
+		},
+	};
 }
 
 async function completeAuthorization(
@@ -383,46 +403,29 @@ app.get("/authorize", async (c) => {
 	if (!validation.ok) return validation.response;
 	const { client, pending } = validation;
 
-	const session = await getSession(c);
-	if (session) {
+	const current = await getSession(c);
+	if (current) {
 		const approved = await clientIdAlreadyApproved(
 			c.env.OAUTH_KV,
-			session.props.login,
+			current.session.login,
 			client.clientId,
 		);
 		if (approved) {
-			return completeAuthorization(c, pending, session.token);
+			return completeAuthorization(c, pending, current.token);
 		}
-		return approvalDialog(c, client, pending, session.props);
+		return approvalDialog(c, client, pending, current.session);
 	}
 
 	// Not signed in: stash the request and bounce through GitHub.
-	const githubState = randomToken(16);
-	await c.env.OAUTH_KV.put(
-		`oauth_state:${githubState}`,
-		JSON.stringify(pending),
-		{
-			expirationTtl: OAUTH_STATE_TTL_SECONDS,
-		},
-	);
-
-	const callbackUri = `${getBaseUrl(c.req)}/callback`;
-	return c.redirect(
-		getUpstreamAuthorizeUrl(
-			c.env.GITHUB_CLIENT_ID,
-			callbackUri,
-			githubState,
-			"user:email",
-		),
-	);
+	return beginGitHubLogin(c, { kind: "authorize", pending });
 });
 
 /** Consent form submission. */
 app.post("/authorize", async (c) => {
 	const approval = await parseRedirectApproval(c.req.raw);
 
-	const session = await getSession(c);
-	if (!session) {
+	const current = await getSession(c);
+	if (!current) {
 		return c.text(
 			"No session found. Please start the authorization again.",
 			401,
@@ -454,13 +457,13 @@ app.post("/authorize", async (c) => {
 
 	await storeClientApproval(
 		c.env.OAUTH_KV,
-		session.props.login,
+		current.session.login,
 		client.clientId,
 	);
-	return completeAuthorization(c, pending, session.token);
+	return completeAuthorization(c, pending, current.token);
 });
 
-/** GitHub OAuth callback. */
+/** GitHub OAuth callback, shared by MCP authorization and plain web sign-in. */
 app.get("/callback", async (c) => {
 	const code = c.req.query("code");
 	const state = c.req.query("state");
@@ -470,13 +473,10 @@ app.get("/callback", async (c) => {
 	}
 
 	const stateKey = `oauth_state:${state}`;
-	const pending = await c.env.OAUTH_KV.get<PendingAuthorization>(
-		stateKey,
-		"json",
-	);
-	if (!pending || typeof pending !== "object") {
+	const record = await c.env.OAUTH_KV.get<OAuthStateRecord>(stateKey, "json");
+	if (!record || typeof record !== "object" || !("kind" in record)) {
 		return c.text(
-			"Invalid or expired state parameter. Please start the authorization again.",
+			"Invalid or expired state parameter. Please start again.",
 			400,
 		);
 	}
@@ -494,7 +494,7 @@ app.get("/callback", async (c) => {
 		const user = await fetchGitHubUser(accessToken);
 
 		const sessionToken = randomToken();
-		const sessionData: Props = {
+		const session: BrowserSession = {
 			login: user.login,
 			name: user.name,
 			email: user.email,
@@ -503,21 +503,25 @@ app.get("/callback", async (c) => {
 		};
 		await c.env.OAUTH_KV.put(
 			`session:${sessionToken}`,
-			JSON.stringify(sessionData),
-			{
-				expirationTtl: SESSION_TTL_SECONDS,
-			},
+			JSON.stringify(session),
+			{ expirationTtl: SESSION_TTL_SECONDS },
 		);
-
 		const cookieHeaders = { "Set-Cookie": sessionCookie(sessionToken) };
+
+		if (record.kind === "login") {
+			const returnTo = isSafeReturnPath(record.returnTo)
+				? record.returnTo
+				: "/";
+			const response = c.redirect(returnTo);
+			response.headers.set("Set-Cookie", cookieHeaders["Set-Cookie"]);
+			return response;
+		}
+
+		const { pending } = record;
 
 		// The client was validated before we left for GitHub, but resolve it
 		// again for the consent screen and in case its registration vanished.
-		const client = await resolveClient(
-			c.env.OAUTH_KV,
-			pending.clientId,
-			baseUrl,
-		);
+		const client = await resolveClient(c.env.OAUTH_KV, pending.clientId);
 		if (
 			!client ||
 			!isRedirectUriAllowed(pending.redirectUri, client.redirectUris)
@@ -645,29 +649,22 @@ app.post("/token", async (c) => {
 		);
 	}
 
-	if (record.codeChallenge) {
-		const valid = await verifyPkce(
+	const pkceOk =
+		Boolean(record.codeChallenge) &&
+		(await verifyPkce(
 			code_verifier,
 			record.codeChallenge,
-			record.codeChallengeMethod ?? "S256",
-		);
-		if (!valid) {
-			return tokenError(c, 400, "invalid_grant", "PKCE verification failed");
-		}
-	} else if (record.clientId !== SETUP_CLIENT_ID) {
-		return tokenError(
-			c,
-			400,
-			"invalid_grant",
-			"Authorization code was issued without PKCE",
-		);
+			record.codeChallengeMethod,
+		));
+	if (!pkceOk) {
+		return tokenError(c, 400, "invalid_grant", "PKCE verification failed");
 	}
 
-	const session = await c.env.OAUTH_KV.get(
+	const session = await c.env.OAUTH_KV.get<BrowserSession>(
 		`session:${record.sessionToken}`,
 		"json",
 	);
-	if (!session || typeof session !== "object") {
+	if (!session || typeof session !== "object" || !session.login) {
 		return tokenError(
 			c,
 			400,
@@ -676,18 +673,24 @@ app.post("/token", async (c) => {
 		);
 	}
 
-	// Mint a token for this client that is independent of the browser session,
-	// so signing out of the web UI does not break connected clients and vice versa.
+	// The access token is its own credential: identity only, no GitHub token,
+	// stored under a separate prefix from browser sessions.
+	const identity: Props = {
+		login: session.login,
+		name: session.name,
+		email: session.email,
+		baseUrl: session.baseUrl,
+	};
 	const accessToken = randomToken();
-	await c.env.OAUTH_KV.put(`session:${accessToken}`, JSON.stringify(session), {
-		expirationTtl: SESSION_TTL_SECONDS,
+	await c.env.OAUTH_KV.put(`token:${accessToken}`, JSON.stringify(identity), {
+		expirationTtl: ACCESS_TOKEN_TTL_SECONDS,
 	});
 
 	return c.json(
 		{
 			access_token: accessToken,
 			token_type: "Bearer",
-			expires_in: SESSION_TTL_SECONDS,
+			expires_in: ACCESS_TOKEN_TTL_SECONDS,
 			scope: DEFAULT_SCOPE,
 		},
 		200,
@@ -794,28 +797,25 @@ app.get("/logout", async (c) => {
 
 app.get("/setup", async (c) => {
 	const baseUrl = getBaseUrl(c.req);
-	const session = await getSession(c);
+	const current = await getSession(c);
 
-	if (!session) {
-		const authorizeUrl = new URL("/authorize", baseUrl);
-		authorizeUrl.searchParams.set("client_id", SETUP_CLIENT_ID);
-		authorizeUrl.searchParams.set("redirect_uri", setupRedirectUri(baseUrl));
-		authorizeUrl.searchParams.set("state", randomToken(8));
-		return c.redirect(authorizeUrl.toString());
+	if (!current) {
+		// Plain web sign-in: no OAuth client, no code, no consent screen.
+		return beginGitHubLogin(c, { kind: "login", returnTo: "/setup" });
 	}
 
 	const apiKey = await getUserApiKey(
 		c.env.OAUTH_KV,
 		c.env.COOKIE_ENCRYPTION_KEY,
-		session.props.login,
+		current.session.login,
 	);
 
 	return c.html(
 		renderSetupPage({
 			baseUrl,
 			version: VERSION,
-			userName: session.props.name || session.props.login,
-			userLogin: session.props.login,
+			userName: current.session.name || current.session.login,
+			userLogin: current.session.login,
 			hasApiKey: Boolean(apiKey),
 			maskedKey: apiKey ? maskApiKey(apiKey) : null,
 		}),
@@ -834,8 +834,8 @@ async function readApiKeyBody(c: AppContext): Promise<string | null> {
 }
 
 app.post("/api/test-key", async (c) => {
-	const session = await getSession(c);
-	if (!session) return c.json({ error: "Unauthorized" }, 401);
+	const current = await getSession(c);
+	if (!current) return c.json({ error: "Unauthorized" }, 401);
 
 	const apiKey = await readApiKeyBody(c);
 	if (!apiKey)
@@ -854,8 +854,8 @@ app.post("/api/test-key", async (c) => {
 });
 
 app.post("/api/save-key", async (c) => {
-	const session = await getSession(c);
-	if (!session) return c.json({ error: "Unauthorized" }, 401);
+	const current = await getSession(c);
+	if (!current) return c.json({ error: "Unauthorized" }, 401);
 
 	const apiKey = await readApiKeyBody(c);
 	if (!apiKey)
@@ -866,7 +866,7 @@ app.post("/api/save-key", async (c) => {
 		await setUserApiKey(
 			c.env.OAUTH_KV,
 			c.env.COOKIE_ENCRYPTION_KEY,
-			session.props.login,
+			current.session.login,
 			apiKey,
 		);
 		return c.json({ success: true });
@@ -883,14 +883,14 @@ app.post("/api/save-key", async (c) => {
 });
 
 app.get("/api/get-key", async (c) => {
-	const session = await getSession(c);
-	if (!session) return c.json({ error: "Unauthorized" }, 401);
+	const current = await getSession(c);
+	if (!current) return c.json({ error: "Unauthorized" }, 401);
 
 	try {
 		const apiKey = await getUserApiKey(
 			c.env.OAUTH_KV,
 			c.env.COOKIE_ENCRYPTION_KEY,
-			session.props.login,
+			current.session.login,
 		);
 		if (!apiKey) return c.json({ configured: false });
 		return c.json({ configured: true, maskedKey: maskApiKey(apiKey) });
@@ -901,11 +901,11 @@ app.get("/api/get-key", async (c) => {
 });
 
 app.delete("/api/delete-key", async (c) => {
-	const session = await getSession(c);
-	if (!session) return c.json({ error: "Unauthorized" }, 401);
+	const current = await getSession(c);
+	if (!current) return c.json({ error: "Unauthorized" }, 401);
 
 	try {
-		await deleteUserApiKey(c.env.OAUTH_KV, session.props.login);
+		await deleteUserApiKey(c.env.OAUTH_KV, current.session.login);
 		return c.json({ success: true });
 	} catch (error) {
 		console.error("API key deletion error:", error);
