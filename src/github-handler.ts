@@ -1,17 +1,21 @@
 /**
- * GitHub OAuth Handler
- * Handles OAuth authorization flow for multi-user authentication
+ * OAuth 2.1 authorization server + account setup pages.
+ *
+ * This worker acts as both the MCP resource server and its own authorization
+ * server. Users authenticate with GitHub; MCP clients receive a bearer token
+ * scoped to this server. Hevy API keys are stored per user, encrypted, in KV.
  */
 
 import { Hono } from "hono";
+import type { Context } from "hono";
 import {
 	getUpstreamAuthorizeUrl,
 	fetchUpstreamAuthToken,
 	fetchGitHubUser,
+	type BrowserSession,
 	type Props,
 } from "./utils.js";
 import {
-	renderApprovalDialog,
 	parseRedirectApproval,
 	clientIdAlreadyApproved,
 	storeClientApproval,
@@ -23,6 +27,18 @@ import {
 	maskApiKey,
 } from "./lib/key-storage.js";
 import { HevyClient } from "./lib/client.js";
+import { getBaseUrl, getMcpUrl } from "./lib/base-url.js";
+import {
+	resolveClient,
+	isRedirectUriAllowed,
+	validateRedirectUris,
+	type RegisteredClientRecord,
+	type ResolvedClient,
+} from "./lib/oauth-clients.js";
+import { isSupportedCodeChallengeMethod, verifyPkce } from "./lib/pkce.js";
+import { renderApprovalDialog } from "./ui/approval.js";
+import { renderSetupPage } from "./ui/setup.js";
+import { VERSION } from "./version.js";
 
 interface Env {
 	OAUTH_KV: KVNamespace;
@@ -31,256 +47,440 @@ interface Env {
 	COOKIE_ENCRYPTION_KEY: string;
 }
 
-// Create Hono app for OAuth routes
+type AppContext = Context<{ Bindings: Env }>;
+
+const SESSION_COOKIE = "session";
+/** Browser sessions written by this version. Never read by bearerAuth. */
+const WEB_SESSION_PREFIX = "web_session:";
+/**
+ * Browser sessions written before 3.2.0. Cookies in the wild still point at
+ * these, so they are read (never written) until they expire; bearerAuth reads
+ * the same prefix for the same reason. Delete both reads after 2026-12-01.
+ */
+const LEGACY_SESSION_PREFIX = "session:";
+const SESSION_TTL_SECONDS = 30 * 24 * 60 * 60;
+const ACCESS_TOKEN_TTL_SECONDS = 30 * 24 * 60 * 60;
+const AUTH_CODE_TTL_SECONDS = 10 * 60;
+const OAUTH_STATE_TTL_SECONDS = 10 * 60;
+const CLIENT_REGISTRATION_TTL_SECONDS = 365 * 24 * 60 * 60;
+const DEFAULT_SCOPE = "mcp";
+
+/** A validated OAuth authorization request waiting for user consent. */
+interface PendingAuthorization {
+	clientId: string;
+	redirectUri: string;
+	state: string;
+	scope: string;
+	codeChallenge: string;
+	codeChallengeMethod: string;
+}
+
+/** What we stash in KV while the user is at GitHub. */
+type OAuthStateRecord =
+	| { kind: "authorize"; pending: PendingAuthorization }
+	| { kind: "login"; returnTo: string };
+
+interface AuthCodeRecord {
+	clientId: string;
+	redirectUri: string;
+	sessionToken: string;
+	codeChallenge: string;
+	codeChallengeMethod: string;
+}
+
 const app = new Hono<{ Bindings: Env }>();
 
-// Add CORS middleware for all routes
-app.use("*", async (c, next) => {
-	// Handle OPTIONS preflight requests
-	if (c.req.method === "OPTIONS") {
-		return new Response(null, {
-			status: 204,
-			headers: {
-				"Access-Control-Allow-Origin": "*",
-				"Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
-				"Access-Control-Allow-Headers": "Content-Type, Authorization",
-				"Access-Control-Max-Age": "86400",
-			},
-		});
-	}
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
 
-	await next();
-
-	// Add CORS headers to all responses
-	c.res.headers.set("Access-Control-Allow-Origin", "*");
-	c.res.headers.set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
-	c.res.headers.set("Access-Control-Allow-Headers", "Content-Type, Authorization");
-});
-
-/**
- * Generate a random state parameter for OAuth
- */
-function generateState(): string {
-	const array = new Uint8Array(16);
+function randomToken(bytes = 32): string {
+	const array = new Uint8Array(bytes);
 	crypto.getRandomValues(array);
-	return Array.from(array, (byte) => byte.toString(16).padStart(2, "0")).join("");
+	return Array.from(array, (byte) => byte.toString(16).padStart(2, "0")).join(
+		"",
+	);
 }
 
-/**
- * Helper function to get the base URL for OAuth endpoints
- * Handles local development where Wrangler rewrites the Host header
- */
-function getBaseUrl(c: any): string {
-	const url = new URL(c.req.url);
-
-	// Check for X-Forwarded-Host header (reverse proxy)
-	const forwardedHost = c.req.header("X-Forwarded-Host");
-	if (forwardedHost) {
-		return `${url.protocol}//${forwardedHost}`;
+function getCookie(c: AppContext, name: string): string | undefined {
+	const header = c.req.header("Cookie");
+	if (!header) return undefined;
+	for (const part of header.split(";")) {
+		const [key, ...rest] = part.trim().split("=");
+		if (key === name) return rest.join("=");
 	}
-
-	// Check if request came from localhost (local dev)
-	// Wrangler dev adds CF-Connecting-IP with localhost address
-	const cfConnectingIp = c.req.header("CF-Connecting-IP");
-
-	// Check if connecting from localhost (::1 is IPv6 localhost, 127.0.0.1 is IPv4)
-	const isLocalhost = cfConnectingIp === "::1" || cfConnectingIp === "127.0.0.1" || cfConnectingIp?.startsWith("127.");
-
-	if (isLocalhost) {
-		return `${url.protocol}//localhost:8787`;
-	}
-
-	// Production: use the Host header as-is
-	return `${url.protocol}//${url.host}`;
+	return undefined;
 }
 
-/**
- * GET /.well-known/oauth-protected-resource
- * OAuth 2.0 Resource Server Metadata (RFC 8707)
- * Tells clients how to access the protected resource
- */
-app.get("/.well-known/oauth-protected-resource", (c) => {
-	const baseUrl = getBaseUrl(c);
+function sessionCookie(token: string): string {
+	return `${SESSION_COOKIE}=${token}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${SESSION_TTL_SECONDS}`;
+}
 
-	const response = c.json({
-		resource: baseUrl,
-		authorization_servers: [`${baseUrl}`],
-		bearer_methods_supported: ["header"],
-		resource_documentation: `${baseUrl}/`,
+function clearedSessionCookie(): string {
+	return `${SESSION_COOKIE}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0`;
+}
+
+async function readBrowserSession(
+	kv: KVNamespace,
+	token: string,
+): Promise<BrowserSession | null> {
+	const data =
+		(await kv.get(`${WEB_SESSION_PREFIX}${token}`, "json")) ??
+		(await kv.get(`${LEGACY_SESSION_PREFIX}${token}`, "json"));
+	if (!data || typeof data !== "object" || !("login" in data)) return null;
+	return data as BrowserSession;
+}
+
+async function getSession(
+	c: AppContext,
+): Promise<{ token: string; session: BrowserSession } | null> {
+	const token = getCookie(c, SESSION_COOKIE);
+	if (!token) return null;
+
+	const session = await readBrowserSession(c.env.OAUTH_KV, token);
+	return session ? { token, session } : null;
+}
+
+/** Only same-origin, absolute-path return targets are allowed after login. */
+function isSafeReturnPath(path: string): boolean {
+	return path.startsWith("/") && !path.startsWith("//") && !path.includes("\\");
+}
+
+/** Stash `record` under a fresh state value and send the browser to GitHub. */
+async function beginGitHubLogin(
+	c: AppContext,
+	record: OAuthStateRecord,
+): Promise<Response> {
+	const githubState = randomToken(16);
+	await c.env.OAUTH_KV.put(
+		`oauth_state:${githubState}`,
+		JSON.stringify(record),
+		{ expirationTtl: OAUTH_STATE_TTL_SECONDS },
+	);
+
+	const callbackUri = `${getBaseUrl(c.req)}/callback`;
+	return c.redirect(
+		getUpstreamAuthorizeUrl(
+			c.env.GITHUB_CLIENT_ID,
+			callbackUri,
+			githubState,
+			"user:email",
+		),
+	);
+}
+
+async function issueAuthCode(
+	kv: KVNamespace,
+	record: AuthCodeRecord,
+): Promise<string> {
+	const code = randomToken();
+	await kv.put(`authcode:${code}`, JSON.stringify(record), {
+		expirationTtl: AUTH_CODE_TTL_SECONDS,
+	});
+	return code;
+}
+
+/** Build the redirect back to the client (success). Includes `iss` per RFC 9207. */
+function successRedirect(
+	pending: PendingAuthorization,
+	code: string,
+	issuer: string,
+): string {
+	const url = new URL(pending.redirectUri);
+	url.searchParams.set("code", code);
+	if (pending.state) url.searchParams.set("state", pending.state);
+	url.searchParams.set("iss", issuer);
+	return url.toString();
+}
+
+/** Build the redirect back to the client (error). Only used after redirect_uri was validated. */
+function errorRedirect(
+	target: { redirectUri: string; state: string },
+	error: string,
+	description: string,
+	issuer: string,
+): string {
+	const url = new URL(target.redirectUri);
+	url.searchParams.set("error", error);
+	url.searchParams.set("error_description", description);
+	if (target.state) url.searchParams.set("state", target.state);
+	url.searchParams.set("iss", issuer);
+	return url.toString();
+}
+
+type ValidationResult =
+	| { ok: true; client: ResolvedClient; pending: PendingAuthorization }
+	| { ok: false; response: Response };
+
+/**
+ * Validate the client_id / redirect_uri pair and PKCE parameters of an
+ * authorization request. Errors in client_id or redirect_uri MUST NOT redirect
+ * (RFC 6749 §4.1.2.1), so they are returned as plain 400 responses. PKCE
+ * errors are reported to the (now validated) redirect URI.
+ */
+async function validateAuthorizationRequest(
+	c: AppContext,
+	params: {
+		clientId?: string;
+		redirectUri?: string;
+		state?: string;
+		scope?: string;
+		codeChallenge?: string;
+		codeChallengeMethod?: string;
+	},
+): Promise<ValidationResult> {
+	const baseUrl = getBaseUrl(c.req);
+	const { clientId, redirectUri } = params;
+
+	if (!clientId || !redirectUri) {
+		return {
+			ok: false,
+			response: c.text(
+				"Missing required parameters: client_id and redirect_uri",
+				400,
+			),
+		};
+	}
+
+	const client = await resolveClient(c.env.OAUTH_KV, clientId);
+	if (!client) {
+		return {
+			ok: false,
+			response: c.text(
+				"Unknown client_id. Register the client first (POST /register) or use a Client ID Metadata Document URL.",
+				400,
+			),
+		};
+	}
+
+	if (!isRedirectUriAllowed(redirectUri, client.redirectUris)) {
+		return {
+			ok: false,
+			response: c.text("redirect_uri is not registered for this client", 400),
+		};
+	}
+
+	const target = { redirectUri, state: params.state ?? "" };
+
+	// OAuth 2.1 / MCP: PKCE with S256 is mandatory for every client.
+	if (!params.codeChallenge) {
+		return {
+			ok: false,
+			response: c.redirect(
+				errorRedirect(
+					target,
+					"invalid_request",
+					"code_challenge is required (PKCE)",
+					baseUrl,
+				),
+			),
+		};
+	}
+	// RFC 7636: a missing method means "plain", which OAuth 2.1 forbids.
+	if (!isSupportedCodeChallengeMethod(params.codeChallengeMethod)) {
+		return {
+			ok: false,
+			response: c.redirect(
+				errorRedirect(
+					target,
+					"invalid_request",
+					"code_challenge_method must be S256",
+					baseUrl,
+				),
+			),
+		};
+	}
+
+	return {
+		ok: true,
+		client,
+		pending: {
+			clientId,
+			redirectUri,
+			state: target.state,
+			scope: params.scope || DEFAULT_SCOPE,
+			codeChallenge: params.codeChallenge,
+			codeChallengeMethod: params.codeChallengeMethod,
+		},
+	};
+}
+
+async function completeAuthorization(
+	c: AppContext,
+	pending: PendingAuthorization,
+	sessionToken: string,
+	extraHeaders: Record<string, string> = {},
+): Promise<Response> {
+	const baseUrl = getBaseUrl(c.req);
+	const code = await issueAuthCode(c.env.OAUTH_KV, {
+		clientId: pending.clientId,
+		redirectUri: pending.redirectUri,
+		sessionToken,
+		codeChallenge: pending.codeChallenge,
+		codeChallengeMethod: pending.codeChallengeMethod,
 	});
 
-	response.headers.set("Access-Control-Allow-Origin", "*");
+	const response = c.redirect(successRedirect(pending, code, baseUrl));
+	for (const [key, value] of Object.entries(extraHeaders)) {
+		response.headers.set(key, value);
+	}
 	return response;
-});
+}
+
+function approvalDialog(
+	c: AppContext,
+	client: ResolvedClient,
+	pending: PendingAuthorization,
+	user: { login: string; name: string },
+	extraHeaders: Record<string, string> = {},
+): Response {
+	const html = renderApprovalDialog({
+		clientId: client.clientId,
+		clientName: client.clientName,
+		clientUri: client.clientUri,
+		redirectUri: pending.redirectUri,
+		state: pending.state,
+		scope: pending.scope,
+		codeChallenge: pending.codeChallenge,
+		codeChallengeMethod: pending.codeChallengeMethod,
+		userLogin: user.login,
+		userName: user.name || user.login,
+		authorizeEndpoint: "/authorize",
+		version: VERSION,
+	});
+	const response = c.html(html);
+	for (const [key, value] of Object.entries(extraHeaders)) {
+		response.headers.set(key, value);
+	}
+	return response;
+}
+
+// ---------------------------------------------------------------------------
+// Discovery metadata
+// ---------------------------------------------------------------------------
+
+function protectedResourceMetadata(baseUrl: string, resource: string) {
+	return {
+		resource,
+		authorization_servers: [baseUrl],
+		bearer_methods_supported: ["header"],
+		scopes_supported: [DEFAULT_SCOPE],
+		resource_name: "Hevy MCP Server",
+		resource_documentation: `${baseUrl}/`,
+	};
+}
 
 /**
- * GET /.well-known/oauth-authorization-server
- * OAuth 2.1 Authorization Server Metadata (RFC 8414)
- * Allows clients to discover OAuth configuration automatically
+ * RFC 9728 Protected Resource Metadata for the MCP endpoint (path-suffixed
+ * well-known URI, which clients try first) and at the root as a fallback.
  */
-app.get("/.well-known/oauth-authorization-server", (c) => {
-	const baseUrl = getBaseUrl(c);
+app.get("/.well-known/oauth-protected-resource/mcp", (c) => {
+	const baseUrl = getBaseUrl(c.req);
+	return c.json(protectedResourceMetadata(baseUrl, getMcpUrl(baseUrl)));
+});
 
-	const response = c.json({
+app.get("/.well-known/oauth-protected-resource", (c) => {
+	const baseUrl = getBaseUrl(c.req);
+	return c.json(protectedResourceMetadata(baseUrl, baseUrl));
+});
+
+/** RFC 8414 Authorization Server Metadata. */
+app.get("/.well-known/oauth-authorization-server", (c) => {
+	const baseUrl = getBaseUrl(c.req);
+	return c.json({
 		issuer: baseUrl,
 		authorization_endpoint: `${baseUrl}/authorize`,
 		token_endpoint: `${baseUrl}/token`,
 		registration_endpoint: `${baseUrl}/register`,
-		scopes_supported: ["mcp"],
+		scopes_supported: [DEFAULT_SCOPE],
 		response_types_supported: ["code"],
+		response_modes_supported: ["query"],
 		grant_types_supported: ["authorization_code"],
-		token_endpoint_auth_methods_supported: ["none"], // Public client
-		code_challenge_methods_supported: ["S256"], // PKCE support
-		revocation_endpoint_auth_methods_supported: ["none"],
+		token_endpoint_auth_methods_supported: ["none"],
+		code_challenge_methods_supported: ["S256"],
+		client_id_metadata_document_supported: true,
+		authorization_response_iss_parameter_supported: true,
 		service_documentation: `${baseUrl}/`,
 	});
-
-	response.headers.set("Access-Control-Allow-Origin", "*");
-	return response;
 });
 
-/**
- * GET /authorize
- * OAuth authorization endpoint - initiates GitHub OAuth flow
- */
+// ---------------------------------------------------------------------------
+// Authorization endpoint
+// ---------------------------------------------------------------------------
+
 app.get("/authorize", async (c) => {
-	const clientId = c.req.query("client_id");
-	const redirectUri = c.req.query("redirect_uri");
-	const state = c.req.query("state");
-	const scope = c.req.query("scope") || "mcp";
+	const validation = await validateAuthorizationRequest(c, {
+		clientId: c.req.query("client_id"),
+		redirectUri: c.req.query("redirect_uri"),
+		state: c.req.query("state"),
+		scope: c.req.query("scope"),
+		codeChallenge: c.req.query("code_challenge"),
+		codeChallengeMethod: c.req.query("code_challenge_method"),
+	});
+	if (!validation.ok) return validation.response;
+	const { client, pending } = validation;
 
-	if (!clientId || !redirectUri || !state) {
-		return c.text("Missing required parameters: client_id, redirect_uri, or state", 400);
-	}
-
-	// Check if user is already authenticated (has session cookie)
-	const sessionCookie = c.req.header("Cookie");
-	const sessionToken = sessionCookie?.match(/session=([^;]+)/)?.[1];
-
-	if (sessionToken) {
-		// User is already authenticated, check if client is already approved
-		const sessionData = await c.env.OAUTH_KV.get(`session:${sessionToken}`, "json");
-
-		if (sessionData && typeof sessionData === "object" && "login" in sessionData) {
-			const username = (sessionData as { login: string }).login;
-			const alreadyApproved = await clientIdAlreadyApproved(c.env.OAUTH_KV, username, clientId);
-
-			if (alreadyApproved) {
-				// Auto-approve and redirect
-				const authCode = generateState();
-				await c.env.OAUTH_KV.put(
-					`authcode:${authCode}`,
-					JSON.stringify({
-						clientId,
-						redirectUri,
-						sessionToken,
-					}),
-					{ expirationTtl: 600 } // 10 minutes
-				);
-
-				const redirectUrl = new URL(redirectUri);
-				redirectUrl.searchParams.set("code", authCode);
-				redirectUrl.searchParams.set("state", state);
-
-				return c.redirect(redirectUrl.toString());
-			}
-
-			// Show approval dialog
-			const html = renderApprovalDialog({
-				clientId,
-				redirectUri,
-				state,
-				scope,
-				userLogin: username,
-				userName: (sessionData as { name?: string }).name || username,
-				authorizeEndpoint: "/authorize",
-			});
-
-			return c.html(html);
+	const current = await getSession(c);
+	if (current) {
+		const approved = await clientIdAlreadyApproved(
+			c.env.OAUTH_KV,
+			current.session.login,
+			client.clientId,
+		);
+		if (approved) {
+			return completeAuthorization(c, pending, current.token);
 		}
+		return approvalDialog(c, client, pending, current.session);
 	}
 
-	// User not authenticated, redirect to GitHub OAuth
-	const githubState = generateState();
-
-	// Store OAuth state and client info
-	await c.env.OAUTH_KV.put(
-		`oauth_state:${githubState}`,
-		JSON.stringify({
-			clientId,
-			redirectUri,
-			state,
-			scope,
-		}),
-		{ expirationTtl: 600 } // 10 minutes
-	);
-
-	const url = new URL(c.req.url);
-	const callbackUri = `${url.protocol}//${url.host}/callback`;
-
-	const githubAuthUrl = getUpstreamAuthorizeUrl(
-		c.env.GITHUB_CLIENT_ID,
-		callbackUri,
-		githubState,
-		"user:email"
-	);
-
-	return c.redirect(githubAuthUrl);
+	// Not signed in: stash the request and bounce through GitHub.
+	return beginGitHubLogin(c, { kind: "authorize", pending });
 });
 
-/**
- * POST /authorize
- * Handles approval form submission
- */
+/** Consent form submission. */
 app.post("/authorize", async (c) => {
 	const approval = await parseRedirectApproval(c.req.raw);
 
+	const current = await getSession(c);
+	if (!current) {
+		return c.text(
+			"No session found. Please start the authorization again.",
+			401,
+		);
+	}
+
+	// Re-validate: hidden form fields are under the user's control.
+	const validation = await validateAuthorizationRequest(c, {
+		clientId: approval.clientId,
+		redirectUri: approval.redirectUri,
+		state: approval.state,
+		scope: approval.scope,
+		codeChallenge: approval.codeChallenge,
+		codeChallengeMethod: approval.codeChallengeMethod,
+	});
+	if (!validation.ok) return validation.response;
+	const { client, pending } = validation;
+
 	if (!approval.approved) {
-		return c.text("Authorization denied", 403);
+		return c.redirect(
+			errorRedirect(
+				pending,
+				"access_denied",
+				"The user denied the request",
+				getBaseUrl(c.req),
+			),
+		);
 	}
 
-	// Get session from cookie
-	const sessionCookie = c.req.header("Cookie");
-	const sessionToken = sessionCookie?.match(/session=([^;]+)/)?.[1];
-
-	if (!sessionToken) {
-		return c.text("No session found", 401);
-	}
-
-	const sessionData = await c.env.OAUTH_KV.get(`session:${sessionToken}`, "json");
-	if (!sessionData || typeof sessionData !== "object" || !("login" in sessionData)) {
-		return c.text("Invalid session", 401);
-	}
-
-	const username = (sessionData as { login: string }).login;
-
-	// Store approval
-	await storeClientApproval(c.env.OAUTH_KV, username, approval.clientId);
-
-	// Generate authorization code
-	const authCode = generateState();
-	await c.env.OAUTH_KV.put(
-		`authcode:${authCode}`,
-		JSON.stringify({
-			clientId: approval.clientId,
-			redirectUri: approval.redirectUri,
-			sessionToken,
-		}),
-		{ expirationTtl: 600 } // 10 minutes
+	await storeClientApproval(
+		c.env.OAUTH_KV,
+		current.session.login,
+		client.clientId,
 	);
-
-	// Redirect back to client with auth code
-	const redirectUrl = new URL(approval.redirectUri);
-	redirectUrl.searchParams.set("code", authCode);
-	redirectUrl.searchParams.set("state", approval.state);
-
-	return c.redirect(redirectUrl.toString());
+	return completeAuthorization(c, pending, current.token);
 });
 
-/**
- * GET /callback
- * GitHub OAuth callback - exchanges code for access token
- */
+/** GitHub OAuth callback, shared by MCP authorization and plain web sign-in. */
 app.get("/callback", async (c) => {
 	const code = c.req.query("code");
 	const state = c.req.query("state");
@@ -289,844 +489,440 @@ app.get("/callback", async (c) => {
 		return c.text("Missing code or state parameter", 400);
 	}
 
-	// Retrieve OAuth state
-	const stateData = await c.env.OAUTH_KV.get(`oauth_state:${state}`, "json");
-	if (!stateData || typeof stateData !== "object") {
-		return c.text("Invalid or expired state parameter", 400);
+	const stateKey = `oauth_state:${state}`;
+	const record = await c.env.OAUTH_KV.get<OAuthStateRecord>(stateKey, "json");
+	if (!record || typeof record !== "object" || !("kind" in record)) {
+		return c.text(
+			"Invalid or expired state parameter. Please start again.",
+			400,
+		);
 	}
+	await c.env.OAUTH_KV.delete(stateKey);
 
-	const { clientId, redirectUri, state: clientState, scope } = stateData as {
-		clientId: string;
-		redirectUri: string;
-		state: string;
-		scope: string;
-	};
+	const baseUrl = getBaseUrl(c.req);
 
 	try {
-		// Exchange code for GitHub access token
-		const url = new URL(c.req.url);
-		const callbackUri = `${url.protocol}//${url.host}/callback`;
-
 		const accessToken = await fetchUpstreamAuthToken(
 			code,
 			c.env.GITHUB_CLIENT_ID,
 			c.env.GITHUB_CLIENT_SECRET,
-			callbackUri
+			`${baseUrl}/callback`,
 		);
-
-		// Fetch user information from GitHub
 		const user = await fetchGitHubUser(accessToken);
 
-		// Create session
-		const sessionToken = generateState();
-		const baseUrl = `${url.protocol}//${url.host}`;
-		const sessionData: Props = {
+		const sessionToken = randomToken();
+		const session: BrowserSession = {
 			login: user.login,
 			name: user.name,
 			email: user.email,
 			accessToken,
 			baseUrl,
 		};
+		await c.env.OAUTH_KV.put(
+			`${WEB_SESSION_PREFIX}${sessionToken}`,
+			JSON.stringify(session),
+			{ expirationTtl: SESSION_TTL_SECONDS },
+		);
+		const cookieHeaders = { "Set-Cookie": sessionCookie(sessionToken) };
 
-		// Store session in KV (expires in 30 days)
-		await c.env.OAUTH_KV.put(`session:${sessionToken}`, JSON.stringify(sessionData), {
-			expirationTtl: 30 * 24 * 60 * 60,
-		});
-
-		// Clean up state
-		await c.env.OAUTH_KV.delete(`oauth_state:${state}`);
-
-		// Check if client is already approved
-		const alreadyApproved = await clientIdAlreadyApproved(c.env.OAUTH_KV, user.login, clientId);
-
-		if (alreadyApproved) {
-			// Auto-approve and redirect
-			const authCode = generateState();
-			await c.env.OAUTH_KV.put(
-				`authcode:${authCode}`,
-				JSON.stringify({
-					clientId,
-					redirectUri,
-					sessionToken,
-				}),
-				{ expirationTtl: 600 }
-			);
-
-			const redirectUrl = new URL(redirectUri);
-			redirectUrl.searchParams.set("code", authCode);
-			redirectUrl.searchParams.set("state", clientState);
-
-			// Set session cookie
-			const response = c.redirect(redirectUrl.toString());
-			response.headers.set(
-				"Set-Cookie",
-				`session=${sessionToken}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${30 * 24 * 60 * 60}`
-			);
+		if (record.kind === "login") {
+			const returnTo = isSafeReturnPath(record.returnTo)
+				? record.returnTo
+				: "/";
+			const response = c.redirect(returnTo);
+			response.headers.set("Set-Cookie", cookieHeaders["Set-Cookie"]);
 			return response;
 		}
 
-		// Show approval dialog
-		const html = renderApprovalDialog({
-			clientId,
-			redirectUri,
-			state: clientState,
-			scope,
-			userLogin: user.login,
-			userName: user.name,
-			authorizeEndpoint: "/authorize",
-		});
+		const { pending } = record;
 
-		const response = c.html(html);
-		response.headers.set(
-			"Set-Cookie",
-			`session=${sessionToken}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${30 * 24 * 60 * 60}`
+		// The client was validated before we left for GitHub, but resolve it
+		// again for the consent screen and in case its registration vanished.
+		const client = await resolveClient(c.env.OAUTH_KV, pending.clientId);
+		if (
+			!client ||
+			!isRedirectUriAllowed(pending.redirectUri, client.redirectUris)
+		) {
+			return c.text(
+				"The requesting client is no longer valid. Please start the authorization again.",
+				400,
+			);
+		}
+
+		const approved = await clientIdAlreadyApproved(
+			c.env.OAUTH_KV,
+			user.login,
+			client.clientId,
 		);
-		return response;
+		if (approved) {
+			return completeAuthorization(c, pending, sessionToken, cookieHeaders);
+		}
+		return approvalDialog(c, client, pending, user, cookieHeaders);
 	} catch (error) {
 		console.error("OAuth callback error:", error);
-		return c.text(`OAuth error: ${error instanceof Error ? error.message : "Unknown error"}`, 500);
+		return c.text(
+			`OAuth error: ${error instanceof Error ? error.message : "Unknown error"}`,
+			500,
+		);
 	}
 });
 
-/**
- * POST /token
- * OAuth 2.1 token endpoint - exchanges authorization code for access token
- * This is what MCP clients call to complete the OAuth flow
- */
+// ---------------------------------------------------------------------------
+// Token endpoint
+// ---------------------------------------------------------------------------
+
+async function readTokenRequest(
+	c: AppContext,
+): Promise<Record<string, string>> {
+	const contentType = c.req.header("Content-Type") || "";
+	if (contentType.includes("application/json")) {
+		const body = (await c.req.json()) as Record<string, unknown>;
+		return Object.fromEntries(
+			Object.entries(body).filter(([, v]) => typeof v === "string") as [
+				string,
+				string,
+			][],
+		);
+	}
+	const form = await c.req.formData();
+	const result: Record<string, string> = {};
+	form.forEach((value, key) => {
+		if (typeof value === "string") result[key] = value;
+	});
+	return result;
+}
+
+function tokenError(
+	c: AppContext,
+	status: 400 | 401 | 500,
+	error: string,
+	description: string,
+): Response {
+	return c.json({ error, error_description: description }, status, {
+		"Cache-Control": "no-store",
+		Pragma: "no-cache",
+	});
+}
+
 app.post("/token", async (c) => {
+	let params: Record<string, string>;
 	try {
-		const formData = await c.req.formData();
-		const grantType = formData.get("grant_type");
-		const code = formData.get("code");
-		const redirectUri = formData.get("redirect_uri");
-		const clientId = formData.get("client_id");
+		params = await readTokenRequest(c);
+	} catch {
+		return tokenError(
+			c,
+			400,
+			"invalid_request",
+			"Malformed token request body",
+		);
+	}
 
-		if (grantType !== "authorization_code") {
-			return c.json(
-				{
-					error: "unsupported_grant_type",
-					error_description: "Only authorization_code grant type is supported",
-				},
-				400
-			);
-		}
+	const { grant_type, code, redirect_uri, client_id, code_verifier } = params;
 
-		if (!code || !redirectUri || !clientId) {
-			return c.json(
-				{
-					error: "invalid_request",
-					error_description: "Missing required parameters: code, redirect_uri, or client_id",
-				},
-				400
-			);
-		}
+	if (grant_type !== "authorization_code") {
+		return tokenError(
+			c,
+			400,
+			"unsupported_grant_type",
+			"Only the authorization_code grant type is supported",
+		);
+	}
+	if (!code || !client_id) {
+		return tokenError(
+			c,
+			400,
+			"invalid_request",
+			"Missing required parameters: code and client_id",
+		);
+	}
 
-		// Retrieve authorization code from KV
-		const authData = await c.env.OAUTH_KV.get(`authcode:${code}`, "json");
-		if (!authData || typeof authData !== "object") {
-			return c.json(
-				{
-					error: "invalid_grant",
-					error_description: "Invalid or expired authorization code",
-				},
-				400
-			);
-		}
+	const codeKey = `authcode:${code}`;
+	const record = await c.env.OAUTH_KV.get<AuthCodeRecord>(codeKey, "json");
+	if (!record || typeof record !== "object") {
+		return tokenError(
+			c,
+			400,
+			"invalid_grant",
+			"Invalid or expired authorization code",
+		);
+	}
+	// Authorization codes are single-use, regardless of the outcome below.
+	await c.env.OAUTH_KV.delete(codeKey);
 
-		const { clientId: storedClientId, redirectUri: storedRedirectUri, sessionToken } = authData as {
-			clientId: string;
-			redirectUri: string;
-			sessionToken: string;
-		};
+	if (client_id !== record.clientId) {
+		return tokenError(
+			c,
+			400,
+			"invalid_grant",
+			"client_id does not match the authorization request",
+		);
+	}
+	if (redirect_uri !== undefined && redirect_uri !== record.redirectUri) {
+		return tokenError(
+			c,
+			400,
+			"invalid_grant",
+			"redirect_uri does not match the authorization request",
+		);
+	}
 
-		// Validate client_id and redirect_uri match
-		if (clientId !== storedClientId || redirectUri !== storedRedirectUri) {
-			return c.json(
-				{
-					error: "invalid_grant",
-					error_description: "Client ID or redirect URI mismatch",
-				},
-				400
-			);
-		}
+	const pkceOk =
+		Boolean(record.codeChallenge) &&
+		(await verifyPkce(
+			code_verifier,
+			record.codeChallenge,
+			record.codeChallengeMethod,
+		));
+	if (!pkceOk) {
+		return tokenError(c, 400, "invalid_grant", "PKCE verification failed");
+	}
 
-		// Retrieve session data
-		const sessionData = await c.env.OAUTH_KV.get(`session:${sessionToken}`, "json");
-		if (!sessionData || typeof sessionData !== "object") {
-			return c.json(
-				{
-					error: "invalid_grant",
-					error_description: "Invalid or expired session",
-				},
-				400
-			);
-		}
+	const session = await readBrowserSession(c.env.OAUTH_KV, record.sessionToken);
+	if (!session) {
+		return tokenError(
+			c,
+			400,
+			"invalid_grant",
+			"The user session has expired. Please authorize again.",
+		);
+	}
 
-		// Delete the authorization code (single-use)
-		await c.env.OAUTH_KV.delete(`authcode:${code}`);
+	// The access token is its own credential: identity only, no GitHub token,
+	// stored under a separate prefix from browser sessions.
+	const identity: Props = {
+		login: session.login,
+		name: session.name,
+		email: session.email,
+		baseUrl: session.baseUrl,
+	};
+	const accessToken = randomToken();
+	await c.env.OAUTH_KV.put(`token:${accessToken}`, JSON.stringify(identity), {
+		expirationTtl: ACCESS_TOKEN_TTL_SECONDS,
+	});
 
-		// Generate access token (we'll use the session token as the access token)
-		const accessToken = sessionToken;
-
-		// Return OAuth 2.1 token response
-		return c.json({
+	return c.json(
+		{
 			access_token: accessToken,
 			token_type: "Bearer",
-			expires_in: 30 * 24 * 60 * 60, // 30 days
-			scope: "mcp",
-		});
-	} catch (error) {
-		console.error("Token endpoint error:", error);
-		return c.json(
-			{
-				error: "server_error",
-				error_description: "An error occurred while processing the token request",
-			},
-			500
-		);
-	}
+			expires_in: ACCESS_TOKEN_TTL_SECONDS,
+			scope: DEFAULT_SCOPE,
+		},
+		200,
+		{ "Cache-Control": "no-store", Pragma: "no-cache" },
+	);
 });
 
-/**
- * POST /register
- * OAuth 2.1 dynamic client registration endpoint
- * For now, we accept all clients dynamically
- */
+// ---------------------------------------------------------------------------
+// Dynamic client registration (RFC 7591) - deprecated by MCP but still widely used
+// ---------------------------------------------------------------------------
+
 app.post("/register", async (c) => {
+	let body: Record<string, unknown>;
 	try {
-		const body = await c.req.json();
-		const redirectUris = body.redirect_uris;
-
-		if (!redirectUris || !Array.isArray(redirectUris) || redirectUris.length === 0) {
-			return c.json(
-				{
-					error: "invalid_redirect_uri",
-					error_description: "At least one redirect_uri is required",
-				},
-				400
-			);
-		}
-
-		// Generate a client ID
-		const clientId = generateState();
-
-		// Store client registration in KV (optional, for future validation)
-		await c.env.OAUTH_KV.put(
-			`client:${clientId}`,
-			JSON.stringify({
-				client_id: clientId,
-				redirect_uris: redirectUris,
-				created_at: new Date().toISOString(),
-			}),
-			{ expirationTtl: 365 * 24 * 60 * 60 } // 1 year
+		body = (await c.req.json()) as Record<string, unknown>;
+	} catch {
+		return c.json(
+			{
+				error: "invalid_client_metadata",
+				error_description: "Body must be JSON",
+			},
+			400,
 		);
+	}
 
-		// Return OAuth 2.1 registration response
-		return c.json({
+	const redirectUris = validateRedirectUris(body.redirect_uris);
+	if (!redirectUris) {
+		return c.json(
+			{
+				error: "invalid_redirect_uri",
+				error_description:
+					"redirect_uris must be a non-empty array of absolute URLs",
+			},
+			400,
+		);
+	}
+
+	const authMethod = body.token_endpoint_auth_method;
+	if (authMethod !== undefined && authMethod !== "none") {
+		return c.json(
+			{
+				error: "invalid_client_metadata",
+				error_description:
+					'Only public clients (token_endpoint_auth_method "none") are supported',
+			},
+			400,
+		);
+	}
+
+	const clientName =
+		typeof body.client_name === "string"
+			? body.client_name.slice(0, 200)
+			: undefined;
+	const clientUri =
+		typeof body.client_uri === "string" && /^https?:\/\//.test(body.client_uri)
+			? body.client_uri
+			: undefined;
+	const applicationType =
+		typeof body.application_type === "string"
+			? body.application_type
+			: undefined;
+
+	const clientId = randomToken(16);
+	const record: RegisteredClientRecord = {
+		client_id: clientId,
+		client_name: clientName,
+		client_uri: clientUri,
+		redirect_uris: redirectUris,
+		application_type: applicationType,
+		created_at: new Date().toISOString(),
+	};
+	await c.env.OAUTH_KV.put(`client:${clientId}`, JSON.stringify(record), {
+		expirationTtl: CLIENT_REGISTRATION_TTL_SECONDS,
+	});
+
+	return c.json(
+		{
 			client_id: clientId,
+			client_id_issued_at: Math.floor(Date.now() / 1000),
+			client_name: clientName,
+			client_uri: clientUri,
 			redirect_uris: redirectUris,
 			grant_types: ["authorization_code"],
-			token_endpoint_auth_method: "none", // Public client
-		});
-	} catch (error) {
-		console.error("Client registration error:", error);
-		return c.json(
-			{
-				error: "server_error",
-				error_description: "An error occurred during client registration",
-			},
-			500
-		);
-	}
+			response_types: ["code"],
+			token_endpoint_auth_method: "none",
+		},
+		201,
+	);
 });
 
-/**
- * GET /logout
- * Clears user session
- */
+// ---------------------------------------------------------------------------
+// Web UI: session + API key management
+// ---------------------------------------------------------------------------
+
 app.get("/logout", async (c) => {
-	const sessionCookie = c.req.header("Cookie");
-	const sessionToken = sessionCookie?.match(/session=([^;]+)/)?.[1];
-
-	if (sessionToken) {
-		await c.env.OAUTH_KV.delete(`session:${sessionToken}`);
+	const token = getCookie(c, SESSION_COOKIE);
+	if (token) {
+		await Promise.all([
+			c.env.OAUTH_KV.delete(`${WEB_SESSION_PREFIX}${token}`),
+			c.env.OAUTH_KV.delete(`${LEGACY_SESSION_PREFIX}${token}`),
+		]);
 	}
-
-	const response = c.text("Logged out successfully");
-	response.headers.set("Set-Cookie", "session=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0");
+	const response = c.redirect("/");
+	response.headers.set("Set-Cookie", clearedSessionCookie());
 	return response;
 });
 
-/**
- * Helper: Get authenticated session data
- */
-async function getAuthenticatedSession(c: any): Promise<Props | null> {
-	const sessionCookie = c.req.header("Cookie");
-	const sessionToken = sessionCookie?.match(/session=([^;]+)/)?.[1];
-
-	if (!sessionToken) {
-		return null;
-	}
-
-	const sessionData = await c.env.OAUTH_KV.get(`session:${sessionToken}`, "json");
-	if (!sessionData || typeof sessionData !== "object" || !("login" in sessionData)) {
-		return null;
-	}
-
-	return sessionData as Props;
-}
-
-/**
- * GET /setup
- * API key management page
- */
 app.get("/setup", async (c) => {
-	const session = await getAuthenticatedSession(c);
+	const baseUrl = getBaseUrl(c.req);
+	const current = await getSession(c);
 
-	if (!session) {
-		// Redirect to login if not authenticated
-		const url = new URL(c.req.url);
-		const authorizeUrl = new URL("/authorize", url.origin);
-		authorizeUrl.searchParams.set("client_id", "setup");
-		authorizeUrl.searchParams.set("redirect_uri", `${url.origin}/setup`);
-		authorizeUrl.searchParams.set("state", "setup");
-		return c.redirect(authorizeUrl.toString());
+	if (!current) {
+		// Plain web sign-in: no OAuth client, no code, no consent screen.
+		return beginGitHubLogin(c, { kind: "login", returnTo: "/setup" });
 	}
 
-	// Check if user has an API key configured
-	const hasApiKey = await getUserApiKey(
+	const apiKey = await getUserApiKey(
 		c.env.OAUTH_KV,
 		c.env.COOKIE_ENCRYPTION_KEY,
-		session.login
+		current.session.login,
 	);
 
-	const html = `
-<!DOCTYPE html>
-<html lang="en">
-<head>
-	<meta charset="UTF-8">
-	<meta name="viewport" content="width=device-width, initial-scale=1.0">
-	<title>Hevy API Key Setup</title>
-	<style>
-		* {
-			margin: 0;
-			padding: 0;
-			box-sizing: border-box;
-		}
-
-		body {
-			font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-			background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-			min-height: 100vh;
-			display: flex;
-			align-items: center;
-			justify-content: center;
-			padding: 20px;
-		}
-
-		.container {
-			background: white;
-			border-radius: 12px;
-			box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
-			max-width: 600px;
-			width: 100%;
-			padding: 40px;
-		}
-
-		h1 {
-			color: #333;
-			margin-bottom: 10px;
-			font-size: 28px;
-		}
-
-		.user-info {
-			background: #f8f9fa;
-			padding: 15px;
-			border-radius: 8px;
-			margin-bottom: 30px;
-			display: flex;
-			align-items: center;
-			gap: 12px;
-		}
-
-		.user-info img {
-			width: 40px;
-			height: 40px;
-			border-radius: 50%;
-		}
-
-		.user-details {
-			flex: 1;
-		}
-
-		.user-name {
-			font-weight: 600;
-			color: #333;
-		}
-
-		.user-login {
-			font-size: 14px;
-			color: #666;
-		}
-
-		.logout-btn {
-			background: #dc3545;
-			color: white;
-			border: none;
-			padding: 6px 12px;
-			border-radius: 4px;
-			font-size: 14px;
-			cursor: pointer;
-			text-decoration: none;
-		}
-
-		.logout-btn:hover {
-			background: #c82333;
-		}
-
-		.status {
-			padding: 15px;
-			border-radius: 8px;
-			margin-bottom: 20px;
-			display: flex;
-			align-items: center;
-			gap: 10px;
-		}
-
-		.status.configured {
-			background: #d4edda;
-			color: #155724;
-			border: 1px solid #c3e6cb;
-		}
-
-		.status.not-configured {
-			background: #fff3cd;
-			color: #856404;
-			border: 1px solid #ffeaa7;
-		}
-
-		.status-icon {
-			font-size: 24px;
-		}
-
-		label {
-			display: block;
-			font-weight: 600;
-			margin-bottom: 8px;
-			color: #333;
-		}
-
-		.help-text {
-			font-size: 14px;
-			color: #666;
-			margin-bottom: 8px;
-		}
-
-		.help-text a {
-			color: #667eea;
-			text-decoration: none;
-		}
-
-		.help-text a:hover {
-			text-decoration: underline;
-		}
-
-		input[type="text"] {
-			width: 100%;
-			padding: 12px;
-			border: 2px solid #e0e0e0;
-			border-radius: 6px;
-			font-size: 14px;
-			font-family: monospace;
-			transition: border-color 0.2s;
-		}
-
-		input[type="text"]:focus {
-			outline: none;
-			border-color: #667eea;
-		}
-
-		.button-group {
-			display: flex;
-			gap: 10px;
-			margin-top: 20px;
-		}
-
-		button {
-			flex: 1;
-			padding: 12px 24px;
-			border: none;
-			border-radius: 6px;
-			font-size: 16px;
-			font-weight: 600;
-			cursor: pointer;
-			transition: all 0.2s;
-		}
-
-		.btn-primary {
-			background: #667eea;
-			color: white;
-		}
-
-		.btn-primary:hover:not(:disabled) {
-			background: #5568d3;
-		}
-
-		.btn-secondary {
-			background: #6c757d;
-			color: white;
-		}
-
-		.btn-secondary:hover:not(:disabled) {
-			background: #5a6268;
-		}
-
-		.btn-danger {
-			background: #dc3545;
-			color: white;
-		}
-
-		.btn-danger:hover:not(:disabled) {
-			background: #c82333;
-		}
-
-		button:disabled {
-			opacity: 0.6;
-			cursor: not-allowed;
-		}
-
-		.message {
-			padding: 12px;
-			border-radius: 6px;
-			margin-bottom: 20px;
-			display: none;
-		}
-
-		.message.success {
-			background: #d4edda;
-			color: #155724;
-			border: 1px solid #c3e6cb;
-		}
-
-		.message.error {
-			background: #f8d7da;
-			color: #721c24;
-			border: 1px solid #f5c6cb;
-		}
-
-		.message.info {
-			background: #d1ecf1;
-			color: #0c5460;
-			border: 1px solid #bee5eb;
-		}
-
-		.spinner {
-			border: 3px solid #f3f3f3;
-			border-top: 3px solid #667eea;
-			border-radius: 50%;
-			width: 20px;
-			height: 20px;
-			animation: spin 0.8s linear infinite;
-			display: inline-block;
-			margin-left: 10px;
-		}
-
-		@keyframes spin {
-			0% { transform: rotate(0deg); }
-			100% { transform: rotate(360deg); }
-		}
-	</style>
-</head>
-<body>
-	<div class="container">
-		<h1>🏋️ Hevy API Key Setup</h1>
-		
-		<div class="user-info">
-			<div class="user-details">
-				<div class="user-name">${session.name || session.login}</div>
-				<div class="user-login">@${session.login}</div>
-			</div>
-			<a href="/logout" class="logout-btn">Logout</a>
-		</div>
-
-		<div class="status ${hasApiKey ? "configured" : "not-configured"}">
-			<span class="status-icon">${hasApiKey ? "✅" : "⚠️"}</span>
-			<div>
-				<strong>${hasApiKey ? "API Key Configured" : "API Key Not Configured"}</strong>
-				<div style="font-size: 14px; margin-top: 4px;">
-					${hasApiKey ? "Your Hevy API key is stored securely." : "Please enter your Hevy API key below to start using the MCP server."}
-				</div>
-			</div>
-		</div>
-
-		<div id="message" class="message"></div>
-
-		<form id="apiKeyForm">
-			<label for="apiKey">Hevy API Key</label>
-			<div class="help-text">
-				Get your API key from <a href="https://hevy.com/settings?developer" target="_blank" rel="noopener noreferrer">Hevy Settings → Developer</a>
-			</div>
-			<input 
-				type="text" 
-				id="apiKey" 
-				name="apiKey" 
-				placeholder="Enter your Hevy API key..."
-				required
-			/>
-
-			<div class="button-group">
-				<button type="button" id="testBtn" class="btn-secondary">Test Key</button>
-				<button type="submit" class="btn-primary">Save Key</button>
-			</div>
-		</form>
-
-		${hasApiKey ? `
-		<div style="margin-top: 20px; padding-top: 20px; border-top: 1px solid #e0e0e0;">
-			<button id="deleteBtn" class="btn-danger" style="width: 100%;">Delete API Key</button>
-		</div>
-		` : ""}
-	</div>
-
-	<script>
-		const form = document.getElementById('apiKeyForm');
-		const apiKeyInput = document.getElementById('apiKey');
-		const testBtn = document.getElementById('testBtn');
-		const deleteBtn = document.getElementById('deleteBtn');
-		const message = document.getElementById('message');
-
-		function showMessage(text, type) {
-			message.textContent = text;
-			message.className = 'message ' + type;
-			message.style.display = 'block';
-			setTimeout(() => {
-				message.style.display = 'none';
-			}, 5000);
-		}
-
-		async function testApiKey() {
-			const apiKey = apiKeyInput.value.trim();
-			if (!apiKey) {
-				showMessage('Please enter an API key', 'error');
-				return;
-			}
-
-			testBtn.disabled = true;
-			testBtn.innerHTML = 'Testing...<span class="spinner"></span>';
-
-			try {
-				const response = await fetch('/api/test-key', {
-					method: 'POST',
-					headers: { 'Content-Type': 'application/json' },
-					body: JSON.stringify({ apiKey }),
-				});
-
-				const data = await response.json();
-
-				if (response.ok) {
-					showMessage('✅ API key is valid!', 'success');
-				} else {
-					showMessage('❌ ' + (data.error || 'Invalid API key'), 'error');
-				}
-			} catch (error) {
-				showMessage('❌ Failed to test API key: ' + error.message, 'error');
-			} finally {
-				testBtn.disabled = false;
-				testBtn.textContent = 'Test Key';
-			}
-		}
-
-		async function saveApiKey(e) {
-			e.preventDefault();
-
-			const apiKey = apiKeyInput.value.trim();
-			if (!apiKey) {
-				showMessage('Please enter an API key', 'error');
-				return;
-			}
-
-			const submitBtn = form.querySelector('button[type="submit"]');
-			submitBtn.disabled = true;
-			submitBtn.innerHTML = 'Saving...<span class="spinner"></span>';
-
-			try {
-				const response = await fetch('/api/save-key', {
-					method: 'POST',
-					headers: { 'Content-Type': 'application/json' },
-					body: JSON.stringify({ apiKey }),
-				});
-
-				const data = await response.json();
-
-				if (response.ok) {
-					showMessage('✅ API key saved successfully!', 'success');
-					setTimeout(() => location.reload(), 1500);
-				} else {
-					showMessage('❌ ' + (data.error || 'Failed to save API key'), 'error');
-				}
-			} catch (error) {
-				showMessage('❌ Failed to save API key: ' + error.message, 'error');
-			} finally {
-				submitBtn.disabled = false;
-				submitBtn.textContent = 'Save Key';
-			}
-		}
-
-		async function deleteApiKey() {
-			if (!confirm('Are you sure you want to delete your API key? You will need to configure it again to use the MCP server.')) {
-				return;
-			}
-
-			deleteBtn.disabled = true;
-			deleteBtn.innerHTML = 'Deleting...<span class="spinner"></span>';
-
-			try {
-				const response = await fetch('/api/delete-key', {
-					method: 'DELETE',
-				});
-
-				if (response.ok) {
-					showMessage('✅ API key deleted successfully', 'success');
-					setTimeout(() => location.reload(), 1500);
-				} else {
-					const data = await response.json();
-					showMessage('❌ ' + (data.error || 'Failed to delete API key'), 'error');
-				}
-			} catch (error) {
-				showMessage('❌ Failed to delete API key: ' + error.message, 'error');
-			} finally {
-				deleteBtn.disabled = false;
-				deleteBtn.textContent = 'Delete API Key';
-			}
-		}
-
-		testBtn.addEventListener('click', testApiKey);
-		form.addEventListener('submit', saveApiKey);
-		if (deleteBtn) {
-			deleteBtn.addEventListener('click', deleteApiKey);
-		}
-	</script>
-</body>
-</html>
-	`;
-
-	return c.html(html);
+	return c.html(
+		renderSetupPage({
+			baseUrl,
+			version: VERSION,
+			userName: current.session.name || current.session.login,
+			userLogin: current.session.login,
+			hasApiKey: Boolean(apiKey),
+			maskedKey: apiKey ? maskApiKey(apiKey) : null,
+		}),
+	);
 });
 
-/**
- * POST /api/test-key
- * Test if a Hevy API key is valid
- */
-app.post("/api/test-key", async (c) => {
-	const session = await getAuthenticatedSession(c);
-	if (!session) {
-		return c.json({ error: "Unauthorized" }, 401);
+async function readApiKeyBody(c: AppContext): Promise<string | null> {
+	try {
+		const body = (await c.req.json()) as { apiKey?: unknown };
+		return typeof body.apiKey === "string" && body.apiKey.trim()
+			? body.apiKey.trim()
+			: null;
+	} catch {
+		return null;
 	}
+}
+
+app.post("/api/test-key", async (c) => {
+	const current = await getSession(c);
+	if (!current) return c.json({ error: "Unauthorized" }, 401);
+
+	const apiKey = await readApiKeyBody(c);
+	if (!apiKey)
+		return c.json({ error: "Invalid request: apiKey is required" }, 400);
 
 	try {
-		const body = await c.req.json();
-		const apiKey = body.apiKey;
-
-		if (!apiKey || typeof apiKey !== "string") {
-			return c.json({ error: "Invalid request: apiKey is required" }, 400);
-		}
-
-		// Test the API key by making a simple request
-		const client = new HevyClient({ apiKey });
-		await client.getWorkouts({ pageSize: 1 });
-
+		await new HevyClient({ apiKey }).getWorkouts({ pageSize: 1 });
 		return c.json({ valid: true });
 	} catch (error) {
 		console.error("API key test error:", error);
 		return c.json(
 			{ error: error instanceof Error ? error.message : "Invalid API key" },
-			400
+			400,
 		);
 	}
 });
 
-/**
- * POST /api/save-key
- * Save user's Hevy API key
- */
 app.post("/api/save-key", async (c) => {
-	const session = await getAuthenticatedSession(c);
-	if (!session) {
-		return c.json({ error: "Unauthorized" }, 401);
-	}
+	const current = await getSession(c);
+	if (!current) return c.json({ error: "Unauthorized" }, 401);
+
+	const apiKey = await readApiKeyBody(c);
+	if (!apiKey)
+		return c.json({ error: "Invalid request: apiKey is required" }, 400);
 
 	try {
-		const body = await c.req.json();
-		const apiKey = body.apiKey;
-
-		if (!apiKey || typeof apiKey !== "string") {
-			return c.json({ error: "Invalid request: apiKey is required" }, 400);
-		}
-
-		// Validate the API key first
-		const client = new HevyClient({ apiKey });
-		await client.getWorkouts({ pageSize: 1 });
-
-		// Store encrypted API key in KV
+		await new HevyClient({ apiKey }).getWorkouts({ pageSize: 1 });
 		await setUserApiKey(
 			c.env.OAUTH_KV,
 			c.env.COOKIE_ENCRYPTION_KEY,
-			session.login,
-			apiKey
+			current.session.login,
+			apiKey,
 		);
-
 		return c.json({ success: true });
 	} catch (error) {
 		console.error("API key save error:", error);
 		return c.json(
-			{ error: error instanceof Error ? error.message : "Failed to save API key" },
-			400
+			{
+				error:
+					error instanceof Error ? error.message : "Failed to save API key",
+			},
+			400,
 		);
 	}
 });
 
-/**
- * GET /api/get-key
- * Get API key status
- */
 app.get("/api/get-key", async (c) => {
-	const session = await getAuthenticatedSession(c);
-	if (!session) {
-		return c.json({ error: "Unauthorized" }, 401);
-	}
+	const current = await getSession(c);
+	if (!current) return c.json({ error: "Unauthorized" }, 401);
 
 	try {
 		const apiKey = await getUserApiKey(
 			c.env.OAUTH_KV,
 			c.env.COOKIE_ENCRYPTION_KEY,
-			session.login
+			current.session.login,
 		);
-
-		if (!apiKey) {
-			return c.json({ configured: false });
-		}
-
-		return c.json({
-			configured: true,
-			maskedKey: maskApiKey(apiKey),
-		});
+		if (!apiKey) return c.json({ configured: false });
+		return c.json({ configured: true, maskedKey: maskApiKey(apiKey) });
 	} catch (error) {
 		console.error("API key retrieval error:", error);
 		return c.json({ error: "Failed to retrieve API key status" }, 500);
 	}
 });
 
-/**
- * DELETE /api/delete-key
- * Delete user's API key
- */
 app.delete("/api/delete-key", async (c) => {
-	const session = await getAuthenticatedSession(c);
-	if (!session) {
-		return c.json({ error: "Unauthorized" }, 401);
-	}
+	const current = await getSession(c);
+	if (!current) return c.json({ error: "Unauthorized" }, 401);
 
 	try {
-		await deleteUserApiKey(c.env.OAUTH_KV, session.login);
+		await deleteUserApiKey(c.env.OAUTH_KV, current.session.login);
 		return c.json({ success: true });
 	} catch (error) {
 		console.error("API key deletion error:", error);
@@ -1135,4 +931,3 @@ app.delete("/api/delete-key", async (c) => {
 });
 
 export default app;
-
