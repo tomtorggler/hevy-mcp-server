@@ -270,4 +270,43 @@ export class HevyClient {
   async createExerciseTemplate(exercise: any): Promise<any> {
     return this.post<any>('/v1/exercise_templates', exercise);
   }
+
+  // ============================================
+  // PROFILE & BODY MEASUREMENTS
+  // ============================================
+
+  /**
+   * Get the authenticated user's profile (units, Pro status, profile URL)
+   */
+  async getUserInfo(): Promise<{ data: any }> {
+    return this.get<{ data: any }>('/v1/user/info');
+  }
+
+  /**
+   * Get a paginated list of body measurements (one entry per date)
+   */
+  async getBodyMeasurements(options?: { page?: number; pageSize?: number }): Promise<any> {
+    return this.get<any>('/v1/body_measurements', options as Record<string, string | number | boolean | undefined>);
+  }
+
+  /**
+   * Get the body measurement entry for a date (YYYY-MM-DD)
+   */
+  async getBodyMeasurement(date: string): Promise<any> {
+    return this.get<any>(`/v1/body_measurements/${encodeURIComponent(date)}`);
+  }
+
+  /**
+   * Create a body measurement entry. The API answers 409 if the date already has one.
+   */
+  async createBodyMeasurement(measurement: any): Promise<any> {
+    return this.post<any>('/v1/body_measurements', measurement);
+  }
+
+  /**
+   * Replace the body measurement entry for a date. Omitted fields are cleared by the API.
+   */
+  async updateBodyMeasurement(date: string, fields: any): Promise<any> {
+    return this.put<any>(`/v1/body_measurements/${encodeURIComponent(date)}`, fields);
+  }
 }

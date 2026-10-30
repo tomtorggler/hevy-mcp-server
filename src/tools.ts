@@ -34,6 +34,12 @@ import {
 	PAGINATION_LIMITS,
 } from "./lib/transforms.js";
 import { handleError, type McpToolResponse } from "./lib/errors.js";
+import {
+	BodyMeasurementFieldsSchema,
+	MeasurementDateSchema,
+	summarizeMeasurement,
+	toBodyMeasurementPayload,
+} from "./lib/body-schemas.js";
 import { TOOL_NAMES } from "./tool-catalog.js";
 import { VERSION } from "./version.js";
 
@@ -51,9 +57,10 @@ export const SERVER_INFO = {
 export const SERVER_INSTRUCTIONS = `Tools for the signed-in user's Hevy fitness account.
 - Exercise IDs: look up exercise_template_id values with get_exercise_templates / get_exercise_template before creating or updating workouts and routines. Never guess IDs.
 - Times are ISO 8601 with timezone (e.g. 2025-01-15T10:00:00Z). Weights are kilograms, distances meters, durations seconds.
-- Page sizes are capped: 10 for workouts, routines and folders; 100 for exercise templates. Page numbers start at 1.
+- Page sizes are capped: 10 for workouts, routines, folders and body measurements; 100 for exercise templates. Page numbers start at 1.
 - update_workout and update_routine replace the whole record. Fetch it first, change what is needed, and send back all exercises and sets.
-- Workouts record what happened; routines are templates (they support rep ranges and rest times, not RPE).`;
+- Workouts record what happened; routines are templates (they support rep ranges and rest times, not RPE).
+- Body measurements are one entry per calendar date (YYYY-MM-DD); update_body_measurement replaces the whole entry. get_user_info tells you the user's preferred units for presenting numbers.`;
 
 const READ_ONLY: ToolAnnotations = {
 	readOnlyHint: true,
@@ -132,9 +139,9 @@ export function registerHevyTools(
 		config: ToolConfig<Args>,
 		handler: ToolHandler<Args>,
 	) {
-		const callback = async (
-			args: z.output<z.ZodObject<Args>>,
-		): Promise<McpToolResponse> => {
+		const { inputSchema, ...rest } = config;
+		const schema = z.object(inputSchema);
+		const callback: ToolCallback<typeof schema> = async (args) => {
 			try {
 				const client = await getClient();
 				return await handler(args, client);
@@ -142,12 +149,7 @@ export function registerHevyTools(
 				return handleError(error);
 			}
 		};
-		const { inputSchema, ...rest } = config;
-		server.registerTool(
-			name,
-			{ ...rest, inputSchema: z.object(inputSchema) },
-			callback as unknown as ToolCallback<z.ZodObject<Args>>,
-		);
+		server.registerTool(name, { ...rest, inputSchema: schema }, callback);
 	}
 
 	// ============================================
@@ -685,6 +687,138 @@ export function registerHevyTools(
 				content: [
 					text(`✓ Successfully created routine folder: ${folder.title}`),
 					text(`Folder ID: ${folder.id}\nIndex: ${folder.index}`),
+				],
+			};
+		},
+	);
+
+	// ============================================
+	// PROFILE & BODY MEASUREMENTS
+	// ============================================
+
+	tool(
+		"get_user_info",
+		{
+			title: "Get profile",
+			description:
+				"The user's Hevy profile: username, display name, public profile URL, preferred weight and distance units, and whether Hevy Pro is active. Use the units when presenting numbers to the user.",
+			inputSchema: {},
+			annotations: READ_ONLY,
+		},
+		async (_args, client) => {
+			const info = (await client.getUserInfo()).data ?? {};
+			return {
+				content: [
+					text(
+						`${info.name || info.username} (@${info.username})\nUnits: ${info.weight_unit ?? "kg"}, ${info.distance_unit ?? "kilometers"}\nHevy Pro: ${info.is_pro ? "yes" : "no"}`,
+					),
+					json(info),
+				],
+			};
+		},
+	);
+
+	tool(
+		"get_body_measurements",
+		{
+			title: "List body measurements",
+			description:
+				"Body weight, body fat and tape measurements the user logged, one entry per date, newest first. Paginated (max 10 per page).",
+			inputSchema: {
+				page: pageParam,
+				page_size: pageSizeParam(PAGINATION_LIMITS.BODY_MEASUREMENTS, 10),
+			},
+			annotations: READ_ONLY,
+		},
+		async ({ page, page_size }, client) => {
+			const result = await client.getBodyMeasurements({
+				page,
+				pageSize: page_size,
+			});
+			const entries: any[] = result.body_measurements ?? [];
+			const summary =
+				entries
+					.map((entry) => `${entry.date}: ${summarizeMeasurement(entry)}`)
+					.join("\n") || "No body measurements found";
+			return {
+				content: [
+					text(
+						`Retrieved ${entries.length} body measurements (page ${result.page} of ${result.page_count})`,
+					),
+					text(summary),
+					json(entries),
+				],
+			};
+		},
+	);
+
+	tool(
+		"get_body_measurement",
+		{
+			title: "Get body measurement",
+			description: "The body measurement entry for one date (YYYY-MM-DD).",
+			inputSchema: { date: MeasurementDateSchema },
+			annotations: READ_ONLY,
+		},
+		async ({ date }, client) => {
+			const entry = await client.getBodyMeasurement(date);
+			return {
+				content: [
+					text(`${entry.date ?? date}: ${summarizeMeasurement(entry)}`),
+					json(entry),
+				],
+			};
+		},
+	);
+
+	tool(
+		"log_body_measurement",
+		{
+			title: "Log body measurement",
+			description:
+				"Create a body measurement entry for a date (YYYY-MM-DD): weight_kg, fat_percent, lean_mass_kg and tape measurements in centimetres. Only the fields you pass are stored. Fails if the date already has an entry; use update_body_measurement in that case.",
+			inputSchema: {
+				date: MeasurementDateSchema,
+				...BodyMeasurementFieldsSchema.shape,
+			},
+			annotations: CREATES,
+		},
+		async ({ date, ...fields }, client) => {
+			const payload = toBodyMeasurementPayload(fields);
+			if (Object.keys(payload).length === 0) {
+				throw new ValidationError(
+					"Provide at least one measurement value (e.g. weight_kg)",
+				);
+			}
+			await client.createBodyMeasurement({ date, ...payload });
+			return {
+				content: [
+					text(`✓ Logged body measurement for ${date}`),
+					text(summarizeMeasurement({ date, ...payload })),
+				],
+			};
+		},
+	);
+
+	tool(
+		"update_body_measurement",
+		{
+			title: "Update body measurement",
+			description:
+				"Replace the body measurement entry for a date (YYYY-MM-DD). Every field is overwritten and omitted fields are cleared, so call get_body_measurement first and send back all values you want to keep.",
+			inputSchema: {
+				date: MeasurementDateSchema,
+				...BodyMeasurementFieldsSchema.shape,
+			},
+			annotations: REPLACES,
+		},
+		async ({ date, ...fields }, client) => {
+			const payload = toBodyMeasurementPayload(fields);
+			await client.updateBodyMeasurement(date, payload);
+			return {
+				content: [
+					text(`✓ Updated body measurement for ${date}`),
+					text(summarizeMeasurement({ date, ...payload })),
 				],
 			};
 		},

@@ -93,6 +93,7 @@ api.json                 # Snapshot of Hevy's OpenAPI spec (https://api.hevyapp.
 | Routines | `get_routines`, `get_routine`, `create_routine`, `update_routine` |
 | Exercises | `get_exercise_templates`, `get_exercise_template`, `create_exercise_template`, `get_exercise_history` |
 | Folders | `get_routine_folders`, `get_routine_folder`, `create_routine_folder` |
+| Body & profile | `get_user_info`, `get_body_measurements`, `get_body_measurement`, `log_body_measurement`, `update_body_measurement` |
 
 Schema notes:
 - Workout exercises need `title` + `exercise_template_id`; `index` fields are generated from array order (`transformWorkoutToAPI`).
@@ -130,10 +131,11 @@ Bindings (`wrangler.jsonc`): `OAUTH_KV` (KV) only. The `MyMCP` Durable Object cl
 - `agents` lists `@modelcontextprotocol/sdk` 1.32.2 as an optional peer; it is not installed and nothing imports it. `npm install` must keep it absent or npm hits ERESOLVE.
 - Dynamic Client Registration is deprecated in MCP 2026-07-28; keep `/register` for compatibility, Client ID Metadata Documents are the primary path.
 - No refresh tokens; tokens are 30-day opaque KV records. `/stats` counts are capped at 1000 by `kv.list`.
-- Hevy endpoints not exposed yet: `GET /v1/user/info`, `GET|POST /v1/body_measurements`, `GET|PUT /v1/body_measurements/{date}`.
+- Body measurements (`src/lib/body-schemas.ts`): one entry per `YYYY-MM-DD`; `POST` returns 409 when the date exists, `PUT` clears omitted fields. The tools pass only caller-provided fields (explicit `null` clears). Every Hevy public endpoint in `api.json` is now exposed.
 
 ## Version history
 
+- **4.1.0** (2026-10) Five new tools for Hevy's profile and body-measurement endpoints (`get_user_info`, `get_body_measurements`, `get_body_measurement`, `log_body_measurement`, `update_body_measurement`); home page tool count derived from the catalog.
 - **4.0.0** (2026-10) Stateless MCP endpoint on MCP SDK v2 / Agents SDK 0.32 `createMcpHandler`; Durable Object `MyMCP` deleted (migration `v2`); `/sse` returns 410; CORS allows `Mcp-*` headers; Zod 4; `cpu_ms` 1000; `account_id` pinned. Tools unchanged.
 - **3.2.0** (2026-10) Interface refresh and security hardening: shared UI layout with dark mode and current client instructions; `redirect_uri` validation against registrations / Client ID Metadata Documents; mandatory PKCE S256; `iss` in authorization responses; separate bearer tokens per client; RFC 9728 `WWW-Authenticate` challenge and path-suffixed protected resource metadata; HTML escaping on consent/setup pages; tools moved to `src/tools.ts` with titles, descriptions, annotations and server instructions; API key loaded lazily per call instead of failing session init; removed unused deps (`@cloudflare/workers-oauth-provider`, `octokit`); `api.json` refreshed from the live Hevy spec.
 - **3.1.0** Hono refactor, modular routes/middleware, 272 tests, `/stats`.

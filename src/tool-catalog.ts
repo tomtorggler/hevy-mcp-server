@@ -50,6 +50,18 @@ export const TOOL_GROUPS: readonly ToolGroup[] = [
 			"create_routine_folder",
 		],
 	},
+	{
+		title: "Body & profile",
+		description:
+			"Body weight and tape measurements by date, plus profile settings such as preferred units.",
+		tools: [
+			"get_user_info",
+			"get_body_measurements",
+			"get_body_measurement",
+			"log_body_measurement",
+			"update_body_measurement",
+		],
+	},
 ];
 
 export const TOOL_NAMES: readonly string[] = TOOL_GROUPS.flatMap(

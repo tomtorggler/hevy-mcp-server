@@ -42,6 +42,9 @@ describe("Hevy MCP tool surface", () => {
 			getWorkoutsCount: vi.fn(),
 			getRoutine: vi.fn(),
 			createRoutineFolder: vi.fn(),
+			getUserInfo: vi.fn(),
+			createBodyMeasurement: vi.fn(),
+			updateBodyMeasurement: vi.fn(),
 		};
 		getClient = vi.fn().mockResolvedValue(hevy as unknown as HevyClient);
 		await connect(getClient);
@@ -59,7 +62,7 @@ describe("Hevy MCP tool surface", () => {
 		expect(client.getInstructions()).toBe(SERVER_INSTRUCTIONS);
 	});
 
-	it("exposes all 17 tools with titles, descriptions and annotations", async () => {
+	it("exposes every catalogued tool with title, description and annotations", async () => {
 		const { tools } = await client.listTools();
 
 		expect(tools.map((t) => t.name).sort()).toEqual([...TOOL_NAMES].sort());
@@ -147,6 +150,68 @@ describe("Hevy MCP tool surface", () => {
 		expect(result.isError).toBe(true);
 		expect(result.content[0].text).toContain("Resource not found");
 		expect(result.content[0].text).toContain("How to fix");
+	});
+
+	it("summarises the user's profile and units", async () => {
+		hevy.getUserInfo.mockResolvedValue({
+			data: {
+				username: "jhon",
+				name: "John Doe",
+				weight_unit: "lbs",
+				distance_unit: "miles",
+				is_pro: true,
+			},
+		});
+		const result = (await client.callTool({
+			name: "get_user_info",
+			arguments: {},
+		})) as any;
+		expect(result.isError).toBeFalsy();
+		expect(result.content[0].text).toContain("John Doe (@jhon)");
+		expect(result.content[0].text).toContain("lbs, miles");
+	});
+
+	it("logs a body measurement with only the provided fields", async () => {
+		hevy.createBodyMeasurement.mockResolvedValue("");
+		const result = (await client.callTool({
+			name: "log_body_measurement",
+			arguments: { date: "2025-01-02", weight_kg: 80.5, waist: 82 },
+		})) as any;
+		expect(result.isError).toBeFalsy();
+		expect(hevy.createBodyMeasurement).toHaveBeenCalledWith({
+			date: "2025-01-02",
+			weight_kg: 80.5,
+			waist: 82,
+		});
+		expect(result.content[1].text).toBe("weight: 80.5 kg, waist: 82 cm");
+	});
+
+	it("refuses to log an empty body measurement or a malformed date", async () => {
+		const empty = (await client.callTool({
+			name: "log_body_measurement",
+			arguments: { date: "2025-01-02" },
+		})) as any;
+		expect(empty.isError).toBe(true);
+		expect(empty.content[0].text).toContain("at least one measurement value");
+
+		const badDate = (await client.callTool({
+			name: "log_body_measurement",
+			arguments: { date: "02/01/2025", weight_kg: 80 },
+		})) as any;
+		expect(badDate.isError).toBe(true);
+		expect(hevy.createBodyMeasurement).not.toHaveBeenCalled();
+	});
+
+	it("passes explicit nulls through on update so values can be cleared", async () => {
+		hevy.updateBodyMeasurement.mockResolvedValue({});
+		await client.callTool({
+			name: "update_body_measurement",
+			arguments: { date: "2025-01-02", weight_kg: 81, waist: null },
+		});
+		expect(hevy.updateBodyMeasurement).toHaveBeenCalledWith("2025-01-02", {
+			weight_kg: 81,
+			waist: null,
+		});
 	});
 
 	it("explains how to configure a missing API key instead of failing the session", async () => {
