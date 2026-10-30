@@ -139,9 +139,9 @@ export function registerHevyTools(
 		config: ToolConfig<Args>,
 		handler: ToolHandler<Args>,
 	) {
-		const callback = async (
-			args: z.output<z.ZodObject<Args>>,
-		): Promise<McpToolResponse> => {
+		const { inputSchema, ...rest } = config;
+		const schema = z.object(inputSchema);
+		const callback: ToolCallback<typeof schema> = async (args) => {
 			try {
 				const client = await getClient();
 				return await handler(args, client);
@@ -149,12 +149,7 @@ export function registerHevyTools(
 				return handleError(error);
 			}
 		};
-		const { inputSchema, ...rest } = config;
-		server.registerTool(
-			name,
-			{ ...rest, inputSchema: z.object(inputSchema) },
-			callback as unknown as ToolCallback<z.ZodObject<Args>>,
-		);
+		server.registerTool(name, { ...rest, inputSchema: schema }, callback);
 	}
 
 	// ============================================
