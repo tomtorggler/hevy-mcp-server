@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { Client } from "@modelcontextprotocol/client";
+import { InMemoryTransport } from "@modelcontextprotocol/server";
 import {
 	createHevyServer,
 	SERVER_INSTRUCTIONS,
@@ -120,9 +120,17 @@ describe("Hevy MCP tool surface", () => {
 	});
 
 	it("rejects arguments that violate the schema before calling Hevy", async () => {
-		await expect(
-			client.callTool({ name: "get_workouts", arguments: { page_size: 50 } }),
-		).rejects.toThrow(/Invalid arguments/);
+		const result = (await client.callTool({
+			name: "get_workouts",
+			arguments: { page_size: 50 },
+		})) as any;
+
+		// SDK v2 reports input validation failures as a tool error result
+		expect(result.isError).toBe(true);
+		expect(result.content[0].text).toMatch(
+			/Invalid arguments for tool get_workouts/,
+		);
+		expect(result.content[0].text).toContain("page_size");
 		expect(hevy.getWorkouts).not.toHaveBeenCalled();
 	});
 
