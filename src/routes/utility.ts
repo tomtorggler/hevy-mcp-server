@@ -24,9 +24,17 @@ utilityRoutes.get("/stats", async (c) => {
 		const kv = c.env.OAUTH_KV;
 
 		// KV list() returns at most 1000 keys per call; counts are capped accordingly.
-		const [userKeys, tokenKeys, sessionKeys, approvalKeys] = await Promise.all([
+		// Legacy `session:` records stop existing after 2026-12-01; drop that list then.
+		const [
+			userKeys,
+			tokenKeys,
+			webSessionKeys,
+			legacySessionKeys,
+			approvalKeys,
+		] = await Promise.all([
 			kv.list({ prefix: "hevy_key:" }),
 			kv.list({ prefix: "token:" }),
+			kv.list({ prefix: "web_session:" }),
 			kv.list({ prefix: "session:" }),
 			kv.list({ prefix: "approval:" }),
 		]);
@@ -34,7 +42,8 @@ utilityRoutes.get("/stats", async (c) => {
 		return c.json({
 			total_users: userKeys.keys.length,
 			connected_clients: tokenKeys.keys.length,
-			browser_sessions: sessionKeys.keys.length,
+			browser_sessions:
+				webSessionKeys.keys.length + legacySessionKeys.keys.length,
 			approved_clients: approvalKeys.keys.length,
 		});
 	} catch (error) {
