@@ -152,10 +152,14 @@ async function fetchClientMetadataDocument(
 			redirect: "manual",
 			signal: controller.signal,
 		});
-		if (response.status >= 300) {
-			return reject(`redirected (status ${response.status})`);
+		if (!response.ok) {
+			const redirected = response.status >= 300 && response.status < 400;
+			return reject(
+				redirected
+					? `redirected (status ${response.status})`
+					: `HTTP ${response.status}`,
+			);
 		}
-		if (!response.ok) return reject(`HTTP ${response.status}`);
 
 		const text = await response.text();
 		if (text.length > CIMD_MAX_BYTES) return reject("document too large");
