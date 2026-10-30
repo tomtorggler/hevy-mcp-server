@@ -189,7 +189,7 @@ export function formatValidationError(error: ZodError): McpToolResponse {
 	// Group errors by path for better readability
 	const errorsByPath = new Map<string, string[]>();
 
-	for (const issue of error.errors) {
+	for (const issue of error.issues) {
 		const path = issue.path.length > 0 ? issue.path.join(".") : "root";
 		const messages = errorsByPath.get(path) || [];
 		messages.push(issue.message);

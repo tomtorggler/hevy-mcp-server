@@ -5,36 +5,44 @@
 {
 	"$schema": "node_modules/wrangler/config-schema.json",
 	"name": "hevy-mcp-server",
+	"account_id": "7bcf0e448e8a8a8b1af2e610332ce6d3",
 	"main": "src/index.ts",
 	"compatibility_date": "2025-03-10",
 	"compatibility_flags": [
 		"nodejs_compat"
 	],
+	/**
+	 * Each stateless MCP request builds a fresh McpServer (17 tool schemas),
+	 * so give it headroom; the old 50 ms ceiling was sized for the DO design.
+	 */
 	"limits": {
-		"cpu_ms": 50
+		"cpu_ms": 1000
 	},
+	/**
+	 * Durable Object history. v1 created the MyMCP session class used by the
+	 * deprecated McpAgent transport; v2 (4.0.0) deletes it now that the MCP
+	 * endpoint is stateless. Keep both entries: Wrangler replays migrations.
+	 */
 	"migrations": [
 		{
 			"new_sqlite_classes": [
 				"MyMCP"
 			],
 			"tag": "v1"
+		},
+		{
+			"deleted_classes": [
+				"MyMCP"
+			],
+			"tag": "v2"
 		}
 	],
-	"durable_objects": {
-		"bindings": [
-			{
-				"class_name": "MyMCP",
-				"name": "MCP_OBJECT"
-			}
-		]
-	},
 	"observability": {
 		"enabled": true
 	},
 	/**
 	 * KV Namespaces - Production
-	 * Stores encrypted user API keys for multi-user OAuth support
+	 * Sessions, OAuth clients/codes/tokens and encrypted per-user Hevy API keys
 	 */
 	"kv_namespaces": [
 		{
@@ -54,57 +62,21 @@
 	],
 	/**
 	 * Development Environment
-	 * Overrides for local development to avoid Host header rewriting
+	 * Separate KV namespace, no custom route (avoids Host header issues locally)
 	 */
 	"env": {
 		"dev": {
 			"name": "hevy-mcp-server-dev",
-			"durable_objects": {
-				"bindings": [
-					{
-						"class_name": "MyMCP",
-						"name": "MCP_OBJECT"
-					}
-				]
-			},
 			"kv_namespaces": [
 				{
 					"binding": "OAUTH_KV",
 					"id": "b58f63e9889b4f87b6ad153501e1e165"
 				}
 			]
-			// No routes for dev - prevents Host header issues in local development
 		}
 	}
 	/**
-	 * Smart Placement
-	 * Docs: https://developers.cloudflare.com/workers/configuration/smart-placement/#smart-placement
+	 * Secrets (set with `wrangler secret put`): GITHUB_CLIENT_ID,
+	 * GITHUB_CLIENT_SECRET, COOKIE_ENCRYPTION_KEY. Locally they live in .dev.vars.
 	 */
-	// "placement": { "mode": "smart" }
-	/**
-	 * Bindings
-	 * Bindings allow your Worker to interact with resources on the Cloudflare Developer Platform, including
-	 * databases, object storage, AI inference, real-time communication and more.
-	 * https://developers.cloudflare.com/workers/runtime-apis/bindings/
-	 */
-	/**
-	 * Environment Variables
-	 * https://developers.cloudflare.com/workers/wrangler/configuration/#environment-variables
-	 */
-	// "vars": { "MY_VARIABLE": "production_value" }
-	/**
-	 * Note: Use secrets to store sensitive data.
-	 * https://developers.cloudflare.com/workers/configuration/secrets/
-	 * HEVY_API_KEY is configured as a secret via: wrangler secret put HEVY_API_KEY
-	 */
-	/**
-	 * Static Assets
-	 * https://developers.cloudflare.com/workers/static-assets/binding/
-	 */
-	// "assets": { "directory": "./public/", "binding": "ASSETS" }
-	/**
-	 * Service Bindings (communicate between multiple Workers)
-	 * https://developers.cloudflare.com/workers/wrangler/configuration/#service-bindings
-	 */
-	// "services": [{ "binding": "MY_SERVICE", "service": "my-service" }]
 }

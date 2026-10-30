@@ -1,6 +1,6 @@
 # Hevy MCP Server
 
-A remote Model Context Protocol (MCP) server for the Hevy fitness tracking API, deployed on Cloudflare Workers. Multi-user: people sign in with GitHub, store their own Hevy API key, and connect from any MCP client over Streamable HTTP with OAuth.
+A remote Model Context Protocol (MCP) server for the Hevy fitness tracking API, deployed on Cloudflare Workers. Multi-user: people sign in with GitHub, store their own Hevy API key, and connect from any MCP client over Streamable HTTP with OAuth. Stateless since 4.0.0: MCP SDK v2 (`@modelcontextprotocol/server`, protocol 2026-07-28 with stateless serving of 2025-era clients), no Durable Objects, no sessions.
 
 **Production:** `https://hevy.tomt.it/mcp` (custom domain configured in `wrangler.jsonc`). People are actively using it; treat changes to auth and tool schemas as breaking.
 
@@ -25,18 +25,17 @@ npx wrangler dev --env dev --var GITHUB_CLIENT_ID:x --var GITHUB_CLIENT_SECRET:x
 
 ```
 src/
-├── index.ts             # Worker entry: exports Hono app (default) and MyMCP Durable Object
-├── app.ts               # Hono app: global CORS, onError, route mounting (OAuth → MCP → utility)
+├── index.ts             # Worker entry: exports the Hono app (no Durable Objects)
+├── app.ts               # Hono app: global CORS (incl. Mcp-* headers), onError, route mounting (OAuth → MCP → utility)
 ├── github-handler.ts    # OAuth 2.1 authorization server + setup pages + key management API
-├── mcp-agent.ts         # MyMCP extends McpAgent (Durable Object); loads the user's Hevy key
-├── mcp-handlers.ts      # MyMCP.serve("/mcp") and legacy MyMCP.serveSSE("/sse")
-├── tools.ts             # createHevyServer()/registerHevyTools(): all 17 tools, transport-independent
+├── mcp-handler.ts       # handleMcpRequest(): createMcpHandler (agents/mcp/server) per request, per-user Hevy client cache
+├── tools.ts             # createHevyServer()/registerHevyTools(): all 17 tools on an SDK v2 McpServer
 ├── tool-catalog.ts      # TOOL_GROUPS / TOOL_NAMES: the one list of tools (home page + tests derive from it)
 ├── version.ts           # VERSION read from package.json (used by /health, server info, pages)
 ├── utils.ts             # Props type + GitHub OAuth helpers
 ├── workers-oauth-utils.ts # consent form parsing, per-user client approvals in KV
 ├── middleware/auth.ts   # bearerAuth: KV session lookup, RFC 9728 WWW-Authenticate challenge
-├── routes/mcp.ts        # /mcp, /mcp/*, /sse, /sse/* → handlers, props via ctx.props
+├── routes/mcp.ts        # /mcp, /mcp/* → bearerAuth → handleMcpRequest; /sse → 410 Gone
 ├── routes/utility.ts    # /health, /stats, /
 ├── ui/                  # layout.ts (tokens, escapeHtml, renderPage), home.ts, setup.ts, approval.ts
 └── lib/
@@ -59,7 +58,7 @@ api.json                 # Snapshot of Hevy's OpenAPI spec (https://api.hevyapp.
 3. Client registers (Client ID Metadata Document URL, or `POST /register`) and calls `GET /authorize` with PKCE S256.
 4. User signs in with GitHub (`/callback`), approves on the consent page (`POST /authorize`), gets redirected with `code` + `iss`.
 5. `POST /token` verifies PKCE and mints a 30-day bearer token stored as `token:<token>` (identity only) in KV.
-6. `bearerAuth` resolves the token to `Props` and passes them as `ctx.props` to the Durable Object; `MyMCP.getClient()` decrypts the user's Hevy key (cached 5 min).
+6. `bearerAuth` resolves the token to `Props`; `handleMcpRequest` builds a fresh `McpServer` for the request with `authContext: { props }`, and `hevyClientProvider` decrypts the user's Hevy key on first tool call (cached per isolate for 5 min; a missing key is never cached).
 
 ### KV keys (`OAUTH_KV`)
 
@@ -86,7 +85,7 @@ api.json                 # Snapshot of Hevy's OpenAPI spec (https://api.hevyapp.
 
 ## Tools
 
-17 tools registered in `src/tools.ts` via `server.registerTool` with `title`, `description`, `inputSchema` and `annotations` (`readOnlyHint` for `get_*`, `destructiveHint` for `update_*`). The server also publishes `instructions` (never guess exercise IDs, ISO 8601 times, update tools replace the whole record).
+17 tools registered in `src/tools.ts` via `server.registerTool` with `title`, `description`, `inputSchema` (a `z.object()`; the raw-shape form is deprecated in SDK v2) and `annotations` (`readOnlyHint` for `get_*`, `destructiveHint` for `update_*`). The server also publishes `instructions` (never guess exercise IDs, ISO 8601 times, update tools replace the whole record). Schema violations come back as `isError` tool results, not protocol errors.
 
 | Group | Tools |
 | --- | --- |
@@ -114,7 +113,7 @@ Hevy endpoints in the live spec that are not exposed yet: `GET /v1/user/info`, `
 
 Secrets (`npx wrangler secret put …`): `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`, `COOKIE_ENCRYPTION_KEY` (32-byte hex, `openssl rand -hex 32`). Locally these go in `.dev.vars`. The legacy single-user `HEVY_API_KEY` is no longer used.
 
-Bindings (`wrangler.jsonc`): `OAUTH_KV` (KV), `MCP_OBJECT` (Durable Object `MyMCP`, SQLite-backed). The `dev` env has its own KV namespace and no custom route. `limits.cpu_ms` is set to 50.
+Bindings (`wrangler.jsonc`): `OAUTH_KV` (KV) only. The `MyMCP` Durable Object class was deleted in migration `v2`; keep both migration entries. The `dev` env has its own KV namespace and no custom route. `limits.cpu_ms` is 1000 (each stateless request rebuilds the tool schemas). `account_id` is pinned because the Cloudflare login has access to more than one account. Deploy with `npx wrangler deploy --env=""`.
 
 ## Connecting clients
 
@@ -123,17 +122,19 @@ Bindings (`wrangler.jsonc`): `OAUTH_KV` (KV), `MCP_OBJECT` (Durable Object `MyMC
 - **Legacy/stdio-only clients:** `npx mcp-remote https://hevy.tomt.it/mcp`.
 - **Inspector:** `npx @modelcontextprotocol/inspector http://localhost:8787/mcp`.
 
-The `/sse` endpoint still exists for old clients but the HTTP+SSE transport is deprecated in the MCP spec; do not document it for new users.
+`/sse` returns 410 Gone with a pointer to `/mcp` (the HTTP+SSE transport was removed in 4.0.0). `GET /mcp` returns 405: there are no server-initiated streams.
 
 ## Tech stack and known debt
 
-- Hono 4, `@modelcontextprotocol/sdk` 1.20 (protocol 2025-06-18), `agents` 0.2.x (`McpAgent`), Zod 3, Wrangler 4, Vitest 3, Biome 2.
-- **`McpAgent` is deprecated upstream** (Agents SDK ≥ 0.20, July 2026) in favour of the stateless `createMcpHandler` from `agents/mcp/server` with `@modelcontextprotocol/server` (SDK v2, protocol 2026-07-28, no sessions/Durable Object). `src/tools.ts` is already transport-independent; migration touches `mcp-agent.ts`, `mcp-handlers.ts`, `routes/mcp.ts`, `wrangler.jsonc` and requires Zod 4. Do this as its own change with the SDK v2 migration guide open.
+- Hono 4, `@modelcontextprotocol/server` + `@modelcontextprotocol/client` 2.4 (SDK v2, protocol 2026-07-28; 2025-era clients are served statelessly via the handler's `legacy: "stateless"` default), `agents` 0.32 (`createMcpHandler` from `agents/mcp/server` only), Zod 4, Wrangler 4, Vitest 3, Biome 2.
+- `agents` lists `@modelcontextprotocol/sdk` 1.32.2 as an optional peer; it is not installed and nothing imports it. `npm install` must keep it absent or npm hits ERESOLVE.
 - Dynamic Client Registration is deprecated in MCP 2026-07-28; keep `/register` for compatibility, Client ID Metadata Documents are the primary path.
-- No refresh tokens; tokens are 30-day opaque KV sessions. `/stats` counts are capped at 1000 by `kv.list`.
+- No refresh tokens; tokens are 30-day opaque KV records. `/stats` counts are capped at 1000 by `kv.list`.
+- Hevy endpoints not exposed yet: `GET /v1/user/info`, `GET|POST /v1/body_measurements`, `GET|PUT /v1/body_measurements/{date}`.
 
 ## Version history
 
+- **4.0.0** (2026-10) Stateless MCP endpoint on MCP SDK v2 / Agents SDK 0.32 `createMcpHandler`; Durable Object `MyMCP` deleted (migration `v2`); `/sse` returns 410; CORS allows `Mcp-*` headers; Zod 4; `cpu_ms` 1000; `account_id` pinned. Tools unchanged.
 - **3.2.0** (2026-10) Interface refresh and security hardening: shared UI layout with dark mode and current client instructions; `redirect_uri` validation against registrations / Client ID Metadata Documents; mandatory PKCE S256; `iss` in authorization responses; separate bearer tokens per client; RFC 9728 `WWW-Authenticate` challenge and path-suffixed protected resource metadata; HTML escaping on consent/setup pages; tools moved to `src/tools.ts` with titles, descriptions, annotations and server instructions; API key loaded lazily per call instead of failing session init; removed unused deps (`@cloudflare/workers-oauth-provider`, `octokit`); `api.json` refreshed from the live Hevy spec.
 - **3.1.0** Hono refactor, modular routes/middleware, 272 tests, `/stats`.
 - **3.0.0** Multi-user GitHub OAuth, per-user encrypted Hevy keys, 17 tools.

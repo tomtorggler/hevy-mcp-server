@@ -8,10 +8,10 @@
 
 import {
 	McpServer,
+	type ToolAnnotations,
 	type ToolCallback,
-} from "@modelcontextprotocol/sdk/server/mcp.js";
-import type { ToolAnnotations } from "@modelcontextprotocol/sdk/types.js";
-import { z, type ZodRawShape, type ZodTypeAny } from "zod";
+} from "@modelcontextprotocol/server";
+import { z, type ZodRawShape } from "zod";
 import type { HevyClient } from "./lib/client.js";
 import {
 	CreateWorkoutSchema,
@@ -94,7 +94,7 @@ const pageSizeParam = (max: number, fallback: number) =>
 		.describe(`Items per page (1-${max})`);
 
 type ToolHandler<Args extends ZodRawShape> = (
-	args: z.objectOutputType<Args, ZodTypeAny>,
+	args: z.output<z.ZodObject<Args>>,
 	client: HevyClient,
 ) => Promise<McpToolResponse>;
 
@@ -133,7 +133,7 @@ export function registerHevyTools(
 		handler: ToolHandler<Args>,
 	) {
 		const callback = async (
-			args: z.objectOutputType<Args, ZodTypeAny>,
+			args: z.output<z.ZodObject<Args>>,
 		): Promise<McpToolResponse> => {
 			try {
 				const client = await getClient();
@@ -142,10 +142,11 @@ export function registerHevyTools(
 				return handleError(error);
 			}
 		};
+		const { inputSchema, ...rest } = config;
 		server.registerTool(
 			name,
-			config,
-			callback as unknown as ToolCallback<Args>,
+			{ ...rest, inputSchema: z.object(inputSchema) },
+			callback as unknown as ToolCallback<z.ZodObject<Args>>,
 		);
 	}
 

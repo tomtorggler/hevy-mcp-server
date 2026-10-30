@@ -6,7 +6,7 @@ A remote [Model Context Protocol](https://modelcontextprotocol.io/) server for t
 
 - **Multi-user**: sign in with GitHub, add your own Hevy API key, done. One deployment serves many people.
 - **Standards-based auth**: OAuth 2.1 with PKCE, protected resource metadata (RFC 9728), Client ID Metadata Documents and Dynamic Client Registration. Works out of the box as a custom connector in Claude.
-- **Streamable HTTP** transport at `/mcp`.
+- **Stateless Streamable HTTP** at `/mcp`, built on MCP SDK v2 (protocol 2026-07-28, with 2025-era clients served transparently). No sessions, no Durable Objects.
 - **17 tools** with titles, descriptions and annotations covering the Hevy public API.
 
 ## 🏋️ Tools
@@ -101,8 +101,10 @@ MCP client ── 401 + WWW-Authenticate(resource_metadata) ──▶ /.well-kno
            ── CIMD or POST /register ──▶ client_id
            ── GET /authorize (PKCE S256) ──▶ GitHub sign-in ──▶ consent ──▶ code (+ iss)
            ── POST /token (code_verifier) ──▶ 30-day bearer token
-           ── POST /mcp (Bearer) ──▶ Durable Object session ──▶ Hevy API (user's key)
+           ── POST /mcp (Bearer) ──▶ fresh McpServer per request ──▶ Hevy API (user's key)
 ```
+
+The legacy `/sse` endpoint returns `410 Gone`; clients that still use the HTTP+SSE transport must switch to `/mcp`.
 
 - Redirect URIs are validated against the client's registration or metadata document before any code is issued.
 - Hevy API keys are AES-GCM encrypted in KV with `COOKIE_ENCRYPTION_KEY` and never returned to clients.
@@ -112,15 +114,15 @@ MCP client ── 401 + WWW-Authenticate(resource_metadata) ──▶ /.well-kno
 
 ```
 src/
-├── index.ts             # Worker entry: Hono app + Durable Object export
-├── app.ts               # CORS, error handling, route mounting
+├── index.ts             # Worker entry: the Hono app
+├── app.ts               # CORS (incl. Mcp-* headers), error handling, route mounting
 ├── github-handler.ts    # OAuth 2.1 AS (authorize/token/register), discovery metadata, setup pages
-├── mcp-agent.ts         # McpAgent Durable Object: per-user Hevy client
-├── mcp-handlers.ts      # Streamable HTTP (and legacy SSE) handlers
-├── tools.ts             # The 17 MCP tools (transport-independent)
+├── mcp-handler.ts       # Stateless MCP endpoint: createMcpHandler per request, per-user Hevy client
+├── tools.ts             # The 17 MCP tools on an SDK v2 McpServer
+├── tool-catalog.ts      # Single list of tools (home page + tests derive from it)
 ├── version.ts           # Version read from package.json
 ├── middleware/auth.ts   # Bearer token middleware with RFC 9728 challenge
-├── routes/              # /mcp, /sse, /health, /stats, /
+├── routes/              # /mcp, /sse (410), /health, /stats, /
 ├── ui/                  # Home, setup and consent pages (shared layout, dark mode)
 └── lib/                 # Hevy client, schemas, validation, errors, key storage, OAuth clients, PKCE
 test/                    # Vitest suite, incl. in-memory MCP client tests
@@ -146,7 +148,7 @@ npm run format       # biome
    }, async ({ thing_id }, client) => ({ content: [text(JSON.stringify(await client.getThing(thing_id)))] }));
    ```
    Errors thrown inside the handler are formatted by `handleError`.
-3. Add it to `TOOL_NAMES` and to the tool groups in `src/ui/home.ts`; `test/tools.test.ts` checks the list.
+3. Add it to the matching group in `src/tool-catalog.ts`; the home page renders from it and `test/tools.test.ts` checks that exactly those tools are registered.
 
 ## 📚 Resources
 
