@@ -1,11 +1,48 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { bearerAuth } from "../../src/middleware/auth.js";
 
-// Mock the KV namespace
 const mockKV = {
 	get: vi.fn(),
 	put: vi.fn(),
 	delete: vi.fn(),
+};
+
+const BASE = "http://localhost";
+const RESOURCE_METADATA = `${BASE}/.well-known/oauth-protected-resource/mcp`;
+
+function makeContext(request: Request) {
+	return {
+		req: {
+			header: (name: string) => request.headers.get(name) ?? undefined,
+			url: request.url,
+		},
+		env: { OAUTH_KV: mockKV },
+		set: vi.fn(),
+		json: vi.fn().mockReturnValue(new Response()),
+	};
+}
+
+function requestWith(authorization?: string) {
+	return new Request(`${BASE}/mcp`, {
+		method: "POST",
+		headers: authorization ? { Authorization: authorization } : {},
+	});
+}
+
+const MISSING_TOKEN_BODY = {
+	error: "unauthorized",
+	message:
+		"Authentication required. Provide an OAuth access token as a Bearer token.",
+};
+const MISSING_TOKEN_HEADER = {
+	"WWW-Authenticate": `Bearer realm="${BASE}", resource_metadata="${RESOURCE_METADATA}", scope="mcp"`,
+};
+const INVALID_TOKEN_BODY = {
+	error: "unauthorized",
+	message: "Invalid or expired token.",
+};
+const INVALID_TOKEN_HEADER = {
+	"WWW-Authenticate": `Bearer realm="${BASE}", error="invalid_token", error_description="The access token is invalid or has expired", resource_metadata="${RESOURCE_METADATA}", scope="mcp"`,
 };
 
 describe("Bearer Auth Middleware", () => {
@@ -14,380 +51,121 @@ describe("Bearer Auth Middleware", () => {
 	});
 
 	describe("Valid Authentication", () => {
-		it("should pass through with valid Bearer token", async () => {
-			const mockProps = {
+		it("passes through with a valid Bearer token and stores props", async () => {
+			const props = {
 				login: "testuser",
-				baseUrl: "http://localhost",
+				baseUrl: BASE,
 				accessToken: "access-token",
 			};
+			mockKV.get.mockResolvedValue(props);
 
-			mockKV.get.mockResolvedValue(mockProps);
-
-			const request = new Request("http://localhost/mcp", {
-				method: "POST",
-				headers: { "Authorization": "Bearer valid-token" },
-			});
-
-			const mockEnv = { OAUTH_KV: mockKV };
-			const mockCtx = {} as any;
-
-			// Create a mock Hono context
-			const mockContext = {
-				req: {
-					header: (name: string) => request.headers.get(name),
-					url: request.url,
-				},
-				env: mockEnv,
-				set: vi.fn(),
-				json: vi.fn(),
-			};
-
+			const ctx = makeContext(requestWith("Bearer valid-token"));
 			const next = vi.fn();
 
-			await bearerAuth(mockContext as any, next);
+			await bearerAuth(ctx as any, next);
 
 			expect(mockKV.get).toHaveBeenCalledWith("session:valid-token", "json");
-			expect(mockContext.set).toHaveBeenCalledWith("props", mockProps);
+			expect(ctx.set).toHaveBeenCalledWith("props", props);
 			expect(next).toHaveBeenCalled();
+			expect(ctx.json).not.toHaveBeenCalled();
 		});
 
-		it("should handle different token formats", async () => {
-			const mockProps = { login: "testuser" };
-			mockKV.get.mockResolvedValue(mockProps);
+		it("accepts tokens with dashes and underscores", async () => {
+			mockKV.get.mockResolvedValue({ login: "testuser" });
+			const ctx = makeContext(
+				requestWith("Bearer token-with-dashes-and_underscores"),
+			);
 
-			const request = new Request("http://localhost/mcp", {
-				method: "POST",
-				headers: { "Authorization": "Bearer token-with-dashes-and_underscores" },
-			});
+			await bearerAuth(ctx as any, vi.fn());
 
-			const mockEnv = { OAUTH_KV: mockKV };
-			const mockCtx = {} as any;
+			expect(mockKV.get).toHaveBeenCalledWith(
+				"session:token-with-dashes-and_underscores",
+				"json",
+			);
+		});
 
-			const mockContext = {
-				req: {
-					header: (name: string) => request.headers.get(name),
-					url: request.url,
-				},
-				env: mockEnv,
-				set: vi.fn(),
-				json: vi.fn(),
-			};
+		it("treats the Bearer scheme case-insensitively", async () => {
+			mockKV.get.mockResolvedValue({ login: "testuser" });
+			const ctx = makeContext(requestWith("bearer abc123"));
 
-			const next = vi.fn();
+			await bearerAuth(ctx as any, vi.fn());
 
-			await bearerAuth(mockContext as any, next);
-
-			expect(mockKV.get).toHaveBeenCalledWith("session:token-with-dashes-and_underscores", "json");
-			expect(mockContext.set).toHaveBeenCalledWith("props", mockProps);
+			expect(mockKV.get).toHaveBeenCalledWith("session:abc123", "json");
 		});
 	});
 
-	describe("Invalid Authentication", () => {
-		it("should return 401 for missing Authorization header", async () => {
-			const request = new Request("http://localhost/mcp", {
-				method: "POST",
-			});
+	describe("Missing credentials", () => {
+		it.each([
+			["no Authorization header", undefined],
+			["a non-Bearer scheme", "Basic invalid-format"],
+			["an empty Bearer token", "Bearer "],
+			["a bare Bearer keyword", "Bearer"],
+		])(
+			"returns 401 with a discovery challenge for %s",
+			async (_label, authorization) => {
+				const ctx = makeContext(requestWith(authorization));
+				const next = vi.fn();
 
-			const mockEnv = { OAUTH_KV: mockKV };
-			const mockCtx = {} as any;
+				await bearerAuth(ctx as any, next);
 
-			const mockContext = {
-				req: {
-					header: (name: string) => request.headers.get(name),
-					url: request.url,
-				},
-				env: mockEnv,
-				set: vi.fn(),
-				json: vi.fn().mockReturnValue(new Response()),
-			};
+				expect(ctx.json).toHaveBeenCalledWith(
+					MISSING_TOKEN_BODY,
+					401,
+					MISSING_TOKEN_HEADER,
+				);
+				expect(mockKV.get).not.toHaveBeenCalled();
+				expect(next).not.toHaveBeenCalled();
+			},
+		);
 
-			const next = vi.fn();
+		it("does not include an error code when no credentials were presented (RFC 6750 §3.1)", async () => {
+			const ctx = makeContext(requestWith());
+			await bearerAuth(ctx as any, vi.fn());
 
-			await bearerAuth(mockContext as any, next);
-
-			expect(mockContext.json).toHaveBeenCalledWith(
-				{
-					error: "unauthorized",
-					message: "Authentication required. Please provide a valid Bearer token.",
-				},
-				401,
-				{
-					"WWW-Authenticate": `Bearer realm="${request.url}", error="invalid_token"`,
-				}
-			);
-			expect(next).not.toHaveBeenCalled();
+			const header = ctx.json.mock.calls[0][2]["WWW-Authenticate"];
+			expect(header).not.toContain("error=");
+			expect(header).toContain(`resource_metadata="${RESOURCE_METADATA}"`);
 		});
+	});
 
-		it("should return 401 for invalid Authorization header format", async () => {
-			const request = new Request("http://localhost/mcp", {
-				method: "POST",
-				headers: { "Authorization": "Basic invalid-format" },
-			});
-
-			const mockEnv = { OAUTH_KV: mockKV };
-			const mockCtx = {} as any;
-
-			const mockContext = {
-				req: {
-					header: (name: string) => request.headers.get(name),
-					url: request.url,
-				},
-				env: mockEnv,
-				set: vi.fn(),
-				json: vi.fn().mockReturnValue(new Response()),
-			};
-
-			const next = vi.fn();
-
-			await bearerAuth(mockContext as any, next);
-
-			expect(mockContext.json).toHaveBeenCalledWith(
-				{
-					error: "unauthorized",
-					message: "Authentication required. Please provide a valid Bearer token.",
-				},
-				401,
-				{
-					"WWW-Authenticate": `Bearer realm="${request.url}", error="invalid_token"`,
-				}
-			);
-			expect(next).not.toHaveBeenCalled();
-		});
-
-		it("should return 401 for empty Bearer token", async () => {
-			const request = new Request("http://localhost/mcp", {
-				method: "POST",
-				headers: { "Authorization": "Bearer " },
-			});
-
-			const mockEnv = { OAUTH_KV: mockKV };
-			const mockCtx = {} as any;
-
-			const mockContext = {
-				req: {
-					header: (name: string) => request.headers.get(name),
-					url: request.url,
-				},
-				env: mockEnv,
-				set: vi.fn(),
-				json: vi.fn().mockReturnValue(new Response()),
-			};
-
-			const next = vi.fn();
-
-			await bearerAuth(mockContext as any, next);
-
-			expect(mockContext.json).toHaveBeenCalledWith(
-				{
-					error: "unauthorized",
-					message: "Authentication required. Please provide a valid Bearer token.",
-				},
-				401,
-				{
-					"WWW-Authenticate": `Bearer realm="${request.url}", error="invalid_token"`,
-				}
-			);
-			expect(next).not.toHaveBeenCalled();
-		});
-
-		it("should return 401 for invalid session data", async () => {
+	describe("Invalid tokens", () => {
+		it("returns 401 invalid_token when the session does not exist", async () => {
 			mockKV.get.mockResolvedValue(null);
-
-			const request = new Request("http://localhost/mcp", {
-				method: "POST",
-				headers: { "Authorization": "Bearer invalid-token" },
-			});
-
-			const mockEnv = { OAUTH_KV: mockKV };
-			const mockCtx = {} as any;
-
-			const mockContext = {
-				req: {
-					header: (name: string) => request.headers.get(name),
-					url: request.url,
-				},
-				env: mockEnv,
-				set: vi.fn(),
-				json: vi.fn().mockReturnValue(new Response()),
-			};
-
+			const ctx = makeContext(requestWith("Bearer invalid-token"));
 			const next = vi.fn();
 
-			await bearerAuth(mockContext as any, next);
+			await bearerAuth(ctx as any, next);
 
 			expect(mockKV.get).toHaveBeenCalledWith("session:invalid-token", "json");
-			expect(mockContext.json).toHaveBeenCalledWith(
-				{
-					error: "unauthorized",
-					message: "Invalid token.",
-				},
-				401
+			expect(ctx.json).toHaveBeenCalledWith(
+				INVALID_TOKEN_BODY,
+				401,
+				INVALID_TOKEN_HEADER,
 			);
 			expect(next).not.toHaveBeenCalled();
 		});
 
-		it("should return 401 for non-object session data", async () => {
+		it("returns 401 invalid_token when the session data is not an object", async () => {
 			mockKV.get.mockResolvedValue("invalid-session-data");
+			const ctx = makeContext(requestWith("Bearer invalid-token"));
 
-			const request = new Request("http://localhost/mcp", {
-				method: "POST",
-				headers: { "Authorization": "Bearer invalid-token" },
-			});
+			await bearerAuth(ctx as any, vi.fn());
 
-			const mockEnv = { OAUTH_KV: mockKV };
-			const mockCtx = {} as any;
-
-			const mockContext = {
-				req: {
-					header: (name: string) => request.headers.get(name),
-					url: request.url,
-				},
-				env: mockEnv,
-				set: vi.fn(),
-				json: vi.fn().mockReturnValue(new Response()),
-			};
-
-			const next = vi.fn();
-
-			await bearerAuth(mockContext as any, next);
-
-			expect(mockContext.json).toHaveBeenCalledWith(
-				{
-					error: "unauthorized",
-					message: "Invalid token.",
-				},
-				401
+			expect(ctx.json).toHaveBeenCalledWith(
+				INVALID_TOKEN_BODY,
+				401,
+				INVALID_TOKEN_HEADER,
 			);
-			expect(next).not.toHaveBeenCalled();
 		});
 	});
 
 	describe("Error Handling", () => {
-		it("should handle KV storage errors", async () => {
+		it("propagates KV storage errors", async () => {
 			mockKV.get.mockRejectedValue(new Error("KV storage error"));
+			const ctx = makeContext(requestWith("Bearer test-token"));
 
-			const request = new Request("http://localhost/mcp", {
-				method: "POST",
-				headers: { "Authorization": "Bearer test-token" },
-			});
-
-			const mockEnv = { OAUTH_KV: mockKV };
-			const mockCtx = {} as any;
-
-			const mockContext = {
-				req: {
-					header: (name: string) => request.headers.get(name),
-					url: request.url,
-				},
-				env: mockEnv,
-				set: vi.fn(),
-				json: vi.fn().mockReturnValue(new Response()),
-			};
-
-			const next = vi.fn();
-
-			await expect(bearerAuth(mockContext as any, next)).rejects.toThrow("KV storage error");
-		});
-
-		it("should handle malformed Authorization header", async () => {
-			const request = new Request("http://localhost/mcp", {
-				method: "POST",
-				headers: { "Authorization": "Bearer" }, // Missing space
-			});
-
-			const mockEnv = { OAUTH_KV: mockKV };
-			const mockCtx = {} as any;
-
-			const mockContext = {
-				req: {
-					header: (name: string) => request.headers.get(name),
-					url: request.url,
-				},
-				env: mockEnv,
-				set: vi.fn(),
-				json: vi.fn().mockReturnValue(new Response()),
-			};
-
-			const next = vi.fn();
-
-			await bearerAuth(mockContext as any, next);
-
-			expect(mockContext.json).toHaveBeenCalledWith(
-				{
-					error: "unauthorized",
-					message: "Authentication required. Please provide a valid Bearer token.",
-				},
-				401,
-				{
-					"WWW-Authenticate": `Bearer realm="${request.url}", error="invalid_token"`,
-				}
-			);
-		});
-	});
-
-	describe("WWW-Authenticate Header", () => {
-		it("should include proper WWW-Authenticate header for missing token", async () => {
-			const request = new Request("http://localhost/mcp", {
-				method: "POST",
-			});
-
-			const mockEnv = { OAUTH_KV: mockKV };
-			const mockCtx = {} as any;
-
-			const mockContext = {
-				req: {
-					header: (name: string) => request.headers.get(name),
-					url: request.url,
-				},
-				env: mockEnv,
-				set: vi.fn(),
-				json: vi.fn().mockReturnValue(new Response()),
-			};
-
-			const next = vi.fn();
-
-			await bearerAuth(mockContext as any, next);
-
-			expect(mockContext.json).toHaveBeenCalledWith(
-				expect.any(Object),
-				401,
-				{
-					"WWW-Authenticate": `Bearer realm="${request.url}", error="invalid_token"`,
-				}
-			);
-		});
-
-		it("should include proper WWW-Authenticate header for invalid token", async () => {
-			mockKV.get.mockResolvedValue(null);
-
-			const request = new Request("http://localhost/mcp", {
-				method: "POST",
-				headers: { "Authorization": "Bearer invalid-token" },
-			});
-
-			const mockEnv = { OAUTH_KV: mockKV };
-			const mockCtx = {} as any;
-
-			const mockContext = {
-				req: {
-					header: (name: string) => request.headers.get(name),
-					url: request.url,
-				},
-				env: mockEnv,
-				set: vi.fn(),
-				json: vi.fn().mockReturnValue(new Response()),
-			};
-
-			const next = vi.fn();
-
-			await bearerAuth(mockContext as any, next);
-
-			expect(mockContext.json).toHaveBeenCalledWith(
-				{
-					error: "unauthorized",
-					message: "Invalid token.",
-				},
-				401
+			await expect(bearerAuth(ctx as any, vi.fn())).rejects.toThrow(
+				"KV storage error",
 			);
 		});
 	});
