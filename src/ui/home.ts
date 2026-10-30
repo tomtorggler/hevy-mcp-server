@@ -1,4 +1,4 @@
-import { TOOL_GROUPS } from "../tool-catalog.js";
+import { TOOL_GROUPS, TOOL_NAMES } from "../tool-catalog.js";
 import { escapeHtml, renderPage } from "./layout.js";
 
 export interface HomePageOptions {
@@ -70,7 +70,7 @@ export function renderHomePage({ baseUrl, version }: HomePageOptions): string {
 
 		<section>
 			<h2>What your assistant can do</h2>
-			<p class="muted">Seventeen tools covering the Hevy public API. Ask for “my last five workouts”, “log today’s push session”, or “how has my deadlift progressed this year”.</p>
+			<p class="muted">${TOOL_NAMES.length} tools covering the Hevy public API. Ask for “my last five workouts”, “log today’s push session”, or “how has my deadlift progressed this year”.</p>
 			<div class="grid">${toolCards}</div>
 		</section>
 

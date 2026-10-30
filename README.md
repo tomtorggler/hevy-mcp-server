@@ -17,6 +17,7 @@ A remote [Model Context Protocol](https://modelcontextprotocol.io/) server for t
 | Routines | `get_routines`, `get_routine`, `create_routine`, `update_routine` |
 | Exercises | `get_exercise_templates`, `get_exercise_template`, `create_exercise_template`, `get_exercise_history` |
 | Folders | `get_routine_folders`, `get_routine_folder`, `create_routine_folder` |
+| Body & profile | `get_user_info`, `get_body_measurements`, `get_body_measurement`, `log_body_measurement`, `update_body_measurement` |
 
 Read tools are marked `readOnlyHint`; `update_*` tools replace the whole record and are marked destructive so clients can ask before running them.
 
