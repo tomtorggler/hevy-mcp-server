@@ -133,26 +133,47 @@ async function fetchClientMetadataDocument(
 ): Promise<ClientMetadataDocument | null> {
 	const controller = new AbortController();
 	const timer = setTimeout(() => controller.abort(), CIMD_FETCH_TIMEOUT_MS);
+	const reject = (reason: string): null => {
+		console.warn(
+			`Client ID Metadata Document rejected for ${clientId}: ${reason}`,
+		);
+		return null;
+	};
 	try {
+		// Workers support only the "follow" and "manual" redirect modes ("error"
+		// throws). The document must be served at the client_id URL itself, so
+		// any redirect is treated as invalid.
 		const response = await fetchFn(clientId, {
 			method: "GET",
-			headers: { Accept: "application/json" },
-			redirect: "error",
+			headers: {
+				Accept: "application/json",
+				"User-Agent": "hevy-mcp-server (Client ID Metadata Document fetch)",
+			},
+			redirect: "manual",
 			signal: controller.signal,
 		});
-		if (!response.ok) return null;
+		if (!response.ok) {
+			const redirected = response.status >= 300 && response.status < 400;
+			return reject(
+				redirected
+					? `redirected (status ${response.status})`
+					: `HTTP ${response.status}`,
+			);
+		}
 
 		const text = await response.text();
-		if (text.length > CIMD_MAX_BYTES) return null;
+		if (text.length > CIMD_MAX_BYTES) return reject("document too large");
 
 		const doc = JSON.parse(text) as Partial<ClientMetadataDocument>;
-		if (!doc || typeof doc !== "object") return null;
-		if (doc.client_id !== clientId) return null;
-		if (!isStringArray(doc.redirect_uris)) return null;
+		if (!doc || typeof doc !== "object") return reject("not a JSON object");
+		if (doc.client_id !== clientId)
+			return reject("client_id does not match the URL");
+		if (!isStringArray(doc.redirect_uris))
+			return reject("redirect_uris missing");
 		if (doc.client_name !== undefined && typeof doc.client_name !== "string")
-			return null;
+			return reject("client_name is not a string");
 		if (doc.client_uri !== undefined && typeof doc.client_uri !== "string")
-			return null;
+			return reject("client_uri is not a string");
 
 		return {
 			client_id: doc.client_id,
@@ -160,8 +181,8 @@ async function fetchClientMetadataDocument(
 			client_uri: doc.client_uri,
 			redirect_uris: doc.redirect_uris,
 		};
-	} catch {
-		return null;
+	} catch (error) {
+		return reject(error instanceof Error ? error.message : String(error));
 	} finally {
 		clearTimeout(timer);
 	}
