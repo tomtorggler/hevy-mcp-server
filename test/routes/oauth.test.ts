@@ -30,9 +30,13 @@ async function registerClient(overrides: Record<string, unknown> = {}) {
 	return { response, body: (await response.json()) as any };
 }
 
-async function seedSession(token = "session-token", login = "octocat") {
+async function seedSession(
+	token = "session-token",
+	login = "octocat",
+	prefix = "web_session:",
+) {
 	await kv.put(
-		`session:${token}`,
+		`${prefix}${token}`,
 		JSON.stringify({
 			login,
 			name: "The Octocat",
@@ -470,10 +474,12 @@ describe("OAuth authorization server", () => {
 			expect(cookie).toContain("HttpOnly");
 
 			const sessionToken = cookie.match(/^session=([0-9a-f]+)/)![1];
-			expect(await kv.get(`session:${sessionToken}`, "json")).toMatchObject({
-				login: "octocat",
-				accessToken: "gho_test",
-			});
+			expect(await kv.get(`web_session:${sessionToken}`, "json")).toMatchObject(
+				{
+					login: "octocat",
+					accessToken: "gho_test",
+				},
+			);
 			// No authorization code is minted for a plain sign-in
 			expect(
 				Array.from(kv.store.keys()).filter((k) => k.startsWith("authcode:")),
@@ -729,7 +735,30 @@ describe("OAuth authorization server", () => {
 			expect(response.status).toBe(302);
 			expect(response.headers.get("Location")).toBe("/");
 			expect(response.headers.get("Set-Cookie")).toContain("Max-Age=0");
+			expect(await kv.get(`web_session:${token}`)).toBeNull();
+		});
+
+		it("still honours and can clear a pre-3.2.0 session cookie", async () => {
+			const token = await seedSession("old-cookie", "octocat", "session:");
+			const page = await call("/setup", {
+				headers: { Cookie: `session=${token}` },
+			});
+			expect(page.status).toBe(200);
+
+			await call("/logout", { headers: { Cookie: `session=${token}` } });
 			expect(await kv.get(`session:${token}`)).toBeNull();
+		});
+
+		it("never writes new browser sessions to the legacy prefix", async () => {
+			await kv.put(
+				"oauth_state:fresh",
+				JSON.stringify({ kind: "login", returnTo: "/setup" }),
+			);
+			mockGitHub();
+			await call("/callback?code=gh-code&state=fresh");
+			expect(
+				Array.from(kv.store.keys()).filter((k) => k.startsWith("session:")),
+			).toHaveLength(0);
 		});
 
 		it("protects the key management API", async () => {

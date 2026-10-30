@@ -7,8 +7,8 @@ export interface ApprovalDialogOptions {
 	redirectUri: string;
 	state: string;
 	scope: string;
-	codeChallenge?: string;
-	codeChallengeMethod?: string;
+	codeChallenge: string;
+	codeChallengeMethod: string;
 	userLogin: string;
 	userName: string;
 	authorizeEndpoint: string;
@@ -79,8 +79,8 @@ export function renderApprovalDialog(options: ApprovalDialogOptions): string {
 				<input type="hidden" name="redirect_uri" value="${escapeHtml(redirectUri)}">
 				<input type="hidden" name="state" value="${escapeHtml(state)}">
 				<input type="hidden" name="scope" value="${escapeHtml(scope)}">
-				${codeChallenge ? `<input type="hidden" name="code_challenge" value="${escapeHtml(codeChallenge)}">` : ""}
-				${codeChallengeMethod ? `<input type="hidden" name="code_challenge_method" value="${escapeHtml(codeChallengeMethod)}">` : ""}
+				<input type="hidden" name="code_challenge" value="${escapeHtml(codeChallenge)}">
+				<input type="hidden" name="code_challenge_method" value="${escapeHtml(codeChallengeMethod)}">
 				<div class="btn-group">
 					<button type="submit" name="approve" value="true" class="btn btn-primary">Allow access</button>
 					<button type="submit" name="approve" value="false" class="btn btn-secondary">Deny</button>

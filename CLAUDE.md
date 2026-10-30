@@ -58,15 +58,16 @@ api.json                 # Snapshot of Hevy's OpenAPI spec (https://api.hevyapp.
 2. Client reads protected resource metadata, then `/.well-known/oauth-authorization-server` (this worker is its own AS).
 3. Client registers (Client ID Metadata Document URL, or `POST /register`) and calls `GET /authorize` with PKCE S256.
 4. User signs in with GitHub (`/callback`), approves on the consent page (`POST /authorize`), gets redirected with `code` + `iss`.
-5. `POST /token` verifies PKCE and mints a 30-day bearer token stored as `session:<token>` in KV.
+5. `POST /token` verifies PKCE and mints a 30-day bearer token stored as `token:<token>` (identity only) in KV.
 6. `bearerAuth` resolves the token to `Props` and passes them as `ctx.props` to the Durable Object; `MyMCP.getClient()` decrypts the user's Hevy key (cached 5 min).
 
 ### KV keys (`OAUTH_KV`)
 
 | Prefix | Content | TTL |
 | --- | --- | --- |
-| `session:<token>` | `BrowserSession` (identity + GitHub access token) behind the `session` cookie | 30 d |
-| `token:<token>` | `Props` (login/name/email/baseUrl only) for MCP bearer tokens minted by `/token`. `bearerAuth` also accepts `session:` records until pre-3.2.0 tokens expire (remove that fallback after 2025-12-01). | 30 d |
+| `web_session:<token>` | `BrowserSession` (identity + GitHub access token) behind the `session` cookie. Never read by `bearerAuth`. | 30 d |
+| `token:<token>` | `Props` (login/name/email/baseUrl only) for MCP bearer tokens minted by `/token` | 30 d |
+| `session:<token>` | **Legacy (pre-3.2.0), read-only.** Was both cookie session and bearer token. `getSession` and `bearerAuth` still read it so existing cookies and connected clients keep working; nothing writes it. Delete both reads after 2026-12-01. | 30 d |
 | `hevy_key:<login>` | AES-GCM encrypted Hevy API key | none |
 | `client:<id>` | DCR registration (redirect_uris, client_name, …) | 1 y |
 | `cimd:<url>` | cached Client ID Metadata Document | 1 h |
@@ -78,7 +79,7 @@ api.json                 # Snapshot of Hevy's OpenAPI spec (https://api.hevyapp.
 
 - `redirect_uri` must match the client's registration/metadata document before anything is issued or redirected to. Unknown client or mismatched URI → plain 400, never a redirect.
 - PKCE S256 is mandatory for every client, no exceptions; `plain` is rejected. The `/setup` page signs in through its own GitHub round-trip (`oauth_state` kind `login`), not through `/authorize`, so there is no internal OAuth client.
-- MCP access tokens (`token:`) never contain the GitHub access token; only browser sessions (`session:`) do.
+- MCP access tokens (`token:`) never contain the GitHub access token; only browser sessions (`web_session:`) do, and `bearerAuth` never reads that prefix.
 - Authorization codes are deleted on first use, success or failure.
 - Everything interpolated into HTML goes through `escapeHtml` (`src/ui/layout.ts`). The consent page renders attacker-controlled `client_id`, `redirect_uri`, `state` and `client_name`.
 - Hevy API keys are never returned to clients or rendered; only `maskApiKey` output is shown.

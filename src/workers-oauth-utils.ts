@@ -9,8 +9,8 @@ export interface ApprovalSubmission {
 	redirectUri: string;
 	state: string;
 	scope: string;
-	codeChallenge?: string;
-	codeChallengeMethod?: string;
+	codeChallenge: string;
+	codeChallengeMethod: string;
 }
 
 function formString(form: FormData, key: string): string {
@@ -30,8 +30,8 @@ export async function parseRedirectApproval(
 		redirectUri: formString(form, "redirect_uri"),
 		state: formString(form, "state"),
 		scope: formString(form, "scope"),
-		codeChallenge: formString(form, "code_challenge") || undefined,
-		codeChallengeMethod: formString(form, "code_challenge_method") || undefined,
+		codeChallenge: formString(form, "code_challenge"),
+		codeChallengeMethod: formString(form, "code_challenge_method"),
 	};
 }
 

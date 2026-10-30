@@ -164,6 +164,30 @@ describe("Bearer Auth Middleware", () => {
 	});
 
 	describe("Invalid tokens", () => {
+		it("does not accept a browser session cookie value as a bearer token", async () => {
+			kvWith({
+				"web_session:cookie-value": {
+					login: "testuser",
+					accessToken: "gho_secret",
+				},
+			});
+			const ctx = makeContext(requestWith("Bearer cookie-value"));
+			const next = vi.fn();
+
+			await bearerAuth(ctx as any, next);
+
+			expect(ctx.json).toHaveBeenCalledWith(
+				INVALID_TOKEN_BODY,
+				401,
+				INVALID_TOKEN_HEADER,
+			);
+			expect(mockKV.get).not.toHaveBeenCalledWith(
+				"web_session:cookie-value",
+				"json",
+			);
+			expect(next).not.toHaveBeenCalled();
+		});
+
 		it("returns 401 invalid_token when neither record exists", async () => {
 			kvWith({});
 			const ctx = makeContext(requestWith("Bearer invalid-token"));

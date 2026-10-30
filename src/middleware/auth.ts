@@ -20,21 +20,27 @@ function isIdentity(value: unknown): value is Props & Record<string, unknown> {
 	);
 }
 
+/** Bearer tokens minted by /token (identity only). */
+const TOKEN_PREFIX = "token:";
 /**
- * Resolve a bearer token to the identity it was issued for.
- *
- * Tokens minted by /token live under `token:` and carry identity only. Before
- * 3.2.0 the browser session token doubled as the access token, so `session:`
- * records are accepted as a fallback until those 30-day tokens expire; the
- * GitHub access token they contain is dropped before anything downstream sees it.
+ * Before 3.2.0 the browser session token doubled as the access token, under
+ * this prefix. Nothing writes it any more (new browser sessions live under
+ * `web_session:`, which this middleware never reads), so the fallback dies
+ * with the last 30-day record. Delete this read after 2026-12-01.
+ */
+const LEGACY_TOKEN_PREFIX = "session:";
+
+/**
+ * Resolve a bearer token to the identity it was issued for. The GitHub access
+ * token inside a legacy record is dropped before anything downstream sees it.
  */
 async function lookupToken(
 	kv: KVNamespace,
 	token: string,
 ): Promise<Props | null> {
 	const record =
-		(await kv.get(`token:${token}`, "json")) ??
-		(await kv.get(`session:${token}`, "json"));
+		(await kv.get(`${TOKEN_PREFIX}${token}`, "json")) ??
+		(await kv.get(`${LEGACY_TOKEN_PREFIX}${token}`, "json"));
 	if (!isIdentity(record)) return null;
 
 	return {

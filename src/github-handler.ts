@@ -50,6 +50,14 @@ interface Env {
 type AppContext = Context<{ Bindings: Env }>;
 
 const SESSION_COOKIE = "session";
+/** Browser sessions written by this version. Never read by bearerAuth. */
+const WEB_SESSION_PREFIX = "web_session:";
+/**
+ * Browser sessions written before 3.2.0. Cookies in the wild still point at
+ * these, so they are read (never written) until they expire; bearerAuth reads
+ * the same prefix for the same reason. Delete both reads after 2026-12-01.
+ */
+const LEGACY_SESSION_PREFIX = "session:";
 const SESSION_TTL_SECONDS = 30 * 24 * 60 * 60;
 const ACCESS_TOKEN_TTL_SECONDS = 30 * 24 * 60 * 60;
 const AUTH_CODE_TTL_SECONDS = 10 * 60;
@@ -112,16 +120,25 @@ function clearedSessionCookie(): string {
 	return `${SESSION_COOKIE}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0`;
 }
 
+async function readBrowserSession(
+	kv: KVNamespace,
+	token: string,
+): Promise<BrowserSession | null> {
+	const data =
+		(await kv.get(`${WEB_SESSION_PREFIX}${token}`, "json")) ??
+		(await kv.get(`${LEGACY_SESSION_PREFIX}${token}`, "json"));
+	if (!data || typeof data !== "object" || !("login" in data)) return null;
+	return data as BrowserSession;
+}
+
 async function getSession(
 	c: AppContext,
 ): Promise<{ token: string; session: BrowserSession } | null> {
 	const token = getCookie(c, SESSION_COOKIE);
 	if (!token) return null;
 
-	const data = await c.env.OAUTH_KV.get(`session:${token}`, "json");
-	if (!data || typeof data !== "object" || !("login" in data)) return null;
-
-	return { token, session: data as BrowserSession };
+	const session = await readBrowserSession(c.env.OAUTH_KV, token);
+	return session ? { token, session } : null;
 }
 
 /** Only same-origin, absolute-path return targets are allowed after login. */
@@ -502,7 +519,7 @@ app.get("/callback", async (c) => {
 			baseUrl,
 		};
 		await c.env.OAUTH_KV.put(
-			`session:${sessionToken}`,
+			`${WEB_SESSION_PREFIX}${sessionToken}`,
 			JSON.stringify(session),
 			{ expirationTtl: SESSION_TTL_SECONDS },
 		);
@@ -660,11 +677,8 @@ app.post("/token", async (c) => {
 		return tokenError(c, 400, "invalid_grant", "PKCE verification failed");
 	}
 
-	const session = await c.env.OAUTH_KV.get<BrowserSession>(
-		`session:${record.sessionToken}`,
-		"json",
-	);
-	if (!session || typeof session !== "object" || !session.login) {
+	const session = await readBrowserSession(c.env.OAUTH_KV, record.sessionToken);
+	if (!session) {
 		return tokenError(
 			c,
 			400,
@@ -788,7 +802,10 @@ app.post("/register", async (c) => {
 app.get("/logout", async (c) => {
 	const token = getCookie(c, SESSION_COOKIE);
 	if (token) {
-		await c.env.OAUTH_KV.delete(`session:${token}`);
+		await Promise.all([
+			c.env.OAUTH_KV.delete(`${WEB_SESSION_PREFIX}${token}`),
+			c.env.OAUTH_KV.delete(`${LEGACY_SESSION_PREFIX}${token}`),
+		]);
 	}
 	const response = c.redirect("/");
 	response.headers.set("Set-Cookie", clearedSessionCookie());
