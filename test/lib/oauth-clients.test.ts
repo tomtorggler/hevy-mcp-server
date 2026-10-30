@@ -164,7 +164,7 @@ describe("resolveClient", () => {
 			});
 			expect(fetchFn).toHaveBeenCalledTimes(1);
 			expect(fetchFn.mock.calls[0][0]).toBe(clientId);
-			expect(fetchFn.mock.calls[0][1]).toMatchObject({ redirect: "error" });
+			expect(fetchFn.mock.calls[0][1]).toMatchObject({ redirect: "manual" });
 
 			// Second resolution is served from the KV cache
 			await resolveClient(kv as any, clientId, fetchFn);
@@ -181,6 +181,16 @@ describe("resolveClient", () => {
 
 		it("rejects a document without redirect_uris", async () => {
 			respondWith({ client_id: clientId, client_name: "x" });
+			expect(await resolveClient(kv as any, clientId, fetchFn)).toBeNull();
+		});
+
+		it("treats a redirect as an invalid document", async () => {
+			fetchFn.mockResolvedValue(
+				new Response(null, {
+					status: 302,
+					headers: { Location: "https://elsewhere.example/x" },
+				}),
+			);
 			expect(await resolveClient(kv as any, clientId, fetchFn)).toBeNull();
 		});
 
