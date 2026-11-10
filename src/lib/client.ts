@@ -1,3 +1,10 @@
+import {
+  parseCreatedExerciseTemplate,
+  parseExerciseTemplatesPage,
+  type CreatedExerciseTemplate,
+  type ExerciseTemplatesPage,
+} from './exercise-templates.js';
+
 /**
  * Configuration options for the Hevy API client
  */
@@ -215,8 +222,10 @@ export class HevyClient {
   /**
    * Get a paginated list of exercise templates
    */
-  async getExerciseTemplates(options?: { page?: number; pageSize?: number }): Promise<any> {
-    return this.get<any>('/v1/exercise_templates', options as Record<string, string | number | boolean | undefined>);
+  async getExerciseTemplates(options?: { page?: number; pageSize?: number }): Promise<ExerciseTemplatesPage> {
+    return parseExerciseTemplatesPage(
+      await this.get<unknown>('/v1/exercise_templates', options as Record<string, string | number | boolean | undefined>)
+    );
   }
 
   /**
@@ -267,8 +276,9 @@ export class HevyClient {
   /**
    * Create a new custom exercise template
    */
-  async createExerciseTemplate(exercise: any): Promise<any> {
-    return this.post<any>('/v1/exercise_templates', exercise);
+  async createExerciseTemplate(exercise: unknown): Promise<CreatedExerciseTemplate> {
+    const data = await this.post<unknown>('/v1/exercise_templates', exercise);
+    return parseCreatedExerciseTemplate(data);
   }
 
   // ============================================

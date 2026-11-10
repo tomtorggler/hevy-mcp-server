@@ -29,7 +29,7 @@ src/
 ├── app.ts               # Hono app: global CORS (incl. Mcp-* headers), onError, route mounting (OAuth → MCP → utility)
 ├── github-handler.ts    # OAuth 2.1 authorization server + setup pages + key management API
 ├── mcp-handler.ts       # handleMcpRequest(): createMcpHandler (agents/mcp/server) per request, per-user Hevy client cache
-├── tools.ts             # createHevyServer()/registerHevyTools(): all 17 tools on an SDK v2 McpServer
+├── tools.ts             # createHevyServer()/registerHevyTools(): all tools on an SDK v2 McpServer
 ├── tool-catalog.ts      # TOOL_GROUPS / TOOL_NAMES: the one list of tools (home page + tests derive from it)
 ├── version.ts           # VERSION read from package.json (used by /health, server info, pages)
 ├── utils.ts             # Props type + GitHub OAuth helpers
@@ -85,13 +85,13 @@ api.json                 # Snapshot of Hevy's OpenAPI spec (https://api.hevyapp.
 
 ## Tools
 
-17 tools registered in `src/tools.ts` via `server.registerTool` with `title`, `description`, `inputSchema` (a `z.object()`; the raw-shape form is deprecated in SDK v2) and `annotations` (`readOnlyHint` for `get_*`, `destructiveHint` for `update_*`). The server also publishes `instructions` (never guess exercise IDs, ISO 8601 times, update tools replace the whole record). Schema violations come back as `isError` tool results, not protocol errors.
+Tools registered in `src/tools.ts` via `server.registerTool` with `title`, `description`, `inputSchema` (a `z.object()`; the raw-shape form is deprecated in SDK v2) and `annotations` (`readOnlyHint` for `get_*` and `search_*`, `destructiveHint` for `update_*`). The server also publishes `instructions` (never guess exercise IDs, ISO 8601 times, update tools replace the whole record). Schema violations come back as `isError` tool results, not protocol errors.
 
 | Group | Tools |
 | --- | --- |
 | Workouts | `get_workouts`, `get_workout`, `create_workout`, `update_workout`, `get_workouts_count`, `get_workout_events` |
 | Routines | `get_routines`, `get_routine`, `create_routine`, `update_routine` |
-| Exercises | `get_exercise_templates`, `get_exercise_template`, `create_exercise_template`, `get_exercise_history` |
+| Exercises | `get_exercise_templates`, `search_exercise_templates`, `get_exercise_template`, `create_exercise_template`, `get_exercise_history` |
 | Folders | `get_routine_folders`, `get_routine_folder`, `create_routine_folder` |
 | Body & profile | `get_user_info`, `get_body_measurements`, `get_body_measurement`, `log_body_measurement`, `update_body_measurement` |
 
@@ -135,6 +135,7 @@ Bindings (`wrangler.jsonc`): `OAUTH_KV` (KV) only. The `MyMCP` Durable Object cl
 
 ## Version history
 
+- **4.2.0** (2026-11) `create_exercise_template` returns the real Hevy id instead of `undefined` (#6). New `search_exercise_templates` tool for case-insensitive title match, including custom exercises (#7).
 - **4.1.0** (2026-10) Five new tools for Hevy's profile and body-measurement endpoints (`get_user_info`, `get_body_measurements`, `get_body_measurement`, `log_body_measurement`, `update_body_measurement`); home page tool count derived from the catalog.
 - **4.0.0** (2026-10) Stateless MCP endpoint on MCP SDK v2 / Agents SDK 0.32 `createMcpHandler`; Durable Object `MyMCP` deleted (migration `v2`); `/sse` returns 410; CORS allows `Mcp-*` headers; Zod 4; `cpu_ms` 1000; `account_id` pinned. Tools unchanged.
 - **3.2.0** (2026-10) Interface refresh and security hardening: shared UI layout with dark mode and current client instructions; `redirect_uri` validation against registrations / Client ID Metadata Documents; mandatory PKCE S256; `iss` in authorization responses; separate bearer tokens per client; RFC 9728 `WWW-Authenticate` challenge and path-suffixed protected resource metadata; HTML escaping on consent/setup pages; tools moved to `src/tools.ts` with titles, descriptions, annotations and server instructions; API key loaded lazily per call instead of failing session init; removed unused deps (`@cloudflare/workers-oauth-provider`, `octokit`); `api.json` refreshed from the live Hevy spec.

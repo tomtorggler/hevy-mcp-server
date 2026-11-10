@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
 import utilityRoutes from "../../src/routes/utility.js";
 import { VERSION } from "../../src/version.js";
 
@@ -91,6 +91,7 @@ describe("Utility Routes", () => {
 				"get_routines",
 				"update_routine",
 				"get_exercise_templates",
+				"search_exercise_templates",
 				"get_exercise_history",
 				"create_routine_folder",
 			]) {

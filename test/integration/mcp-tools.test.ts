@@ -537,7 +537,13 @@ describe("MCP Tools Integration Tests", () => {
 				page: 1,
 				page_count: 1,
 				exercise_templates: [
-					{ id: "template-1", title: "Bench Press", type: "weight_reps" },
+					{
+						id: "template-1",
+						title: "Bench Press",
+						type: "weight_reps",
+						primary_muscle_group: "chest",
+						is_custom: false,
+					},
 				],
 			};
 			mockFetchSuccess(mockTemplates);
@@ -599,7 +605,7 @@ describe("MCP Tools Integration Tests", () => {
 
 	describe("create_exercise_template", () => {
 		it("should successfully create a custom exercise template", async () => {
-			mockFetchSuccess({ id: "new-template-id", title: "My Exercise" });
+			mockFetchSuccess({ id: "new-template-id" });
 
 			const templateData = {
 				title: "My Exercise",
@@ -637,7 +643,7 @@ describe("MCP Tools Integration Tests", () => {
 		});
 
 		it("should handle templates with secondary muscles", async () => {
-			mockFetchSuccess({ id: "new-template-id", title: "My Exercise" });
+			mockFetchSuccess({ id: "new-template-id" });
 
 			const templateData = {
 				title: "My Exercise",
