@@ -40,6 +40,11 @@ import {
 	summarizeMeasurement,
 	toBodyMeasurementPayload,
 } from "./lib/body-schemas.js";
+import {
+	filterExerciseTemplatesByTitle,
+	paginateItems,
+	type ExerciseTemplateListItem,
+} from "./lib/exercise-templates.js";
 import { TOOL_NAMES } from "./tool-catalog.js";
 import { VERSION } from "./version.js";
 
@@ -55,7 +60,7 @@ export const SERVER_INFO = {
 };
 
 export const SERVER_INSTRUCTIONS = `Tools for the signed-in user's Hevy fitness account.
-- Exercise IDs: look up exercise_template_id values with get_exercise_templates / get_exercise_template before creating or updating workouts and routines. Never guess IDs.
+- Exercise IDs: look up exercise_template_id values with search_exercise_templates or get_exercise_templates / get_exercise_template before creating or updating workouts and routines. Never guess IDs.
 - Times are ISO 8601 with timezone (e.g. 2025-01-15T10:00:00Z). Weights are kilograms, distances meters, durations seconds.
 - Page sizes are capped: 10 for workouts, routines, folders and body measurements; 100 for exercise templates. Page numbers start at 1.
 - update_workout and update_routine replace the whole record. Fetch it first, change what is needed, and send back all exercises and sets.
@@ -118,6 +123,42 @@ function text(value: string): { type: "text"; text: string } {
 
 function json(value: unknown): { type: "text"; text: string } {
 	return text(JSON.stringify(value, null, 2));
+}
+
+function formatExerciseTemplateList(
+	templates: ExerciseTemplateListItem[],
+	emptyMessage = "No exercise templates found",
+): string {
+	if (templates.length === 0) {
+		return emptyMessage;
+	}
+	return templates
+		.map(
+			(template, index) =>
+				`${index + 1}. ${template.title} (${template.type})\n   ID: ${template.id}\n   Primary: ${template.primary_muscle_group}\n   Custom: ${template.is_custom ? "Yes" : "No"}`,
+		)
+		.join("\n");
+}
+
+async function loadAllExerciseTemplates(
+	client: HevyClient,
+): Promise<ExerciseTemplateListItem[]> {
+	const templates: ExerciseTemplateListItem[] = [];
+	let page = 1;
+	let pageCount = 1;
+	do {
+		const response = await client.getExerciseTemplates({
+			page,
+			pageSize: PAGINATION_LIMITS.EXERCISE_TEMPLATES,
+		});
+		const batch = Array.isArray(response.exercise_templates)
+			? response.exercise_templates
+			: [];
+		templates.push(...batch);
+		pageCount = Number(response.page_count) || page;
+		page += 1;
+	} while (page <= pageCount);
+	return templates;
 }
 
 /** Create a fully configured Hevy MCP server. */
@@ -458,7 +499,7 @@ export function registerHevyTools(
 		{
 			title: "List exercises",
 			description:
-				"Browse the exercise library (Hevy's built-in exercises plus the user's custom ones) to find exercise_template_id values. Paginated (max 100 per page); there is no search, so page through and match titles.",
+				"Browse the exercise library (Hevy's built-in exercises plus the user's custom ones) one page at a time. Use search_exercise_templates to find an exercise_template_id by title.",
 			inputSchema: {
 				page: pageParam,
 				page_size: pageSizeParam(PAGINATION_LIMITS.EXERCISE_TEMPLATES, 20),
@@ -470,21 +511,60 @@ export function registerHevyTools(
 				page,
 				pageSize: page_size,
 			});
-
-			const summary =
-				templates.exercise_templates
-					?.map(
-						(template: any, index: number) =>
-							`${index + 1}. ${template.title} (${template.type})\n   ID: ${template.id}\n   Primary: ${template.primary_muscle_group}\n   Custom: ${template.is_custom ? "Yes" : "No"}`,
-					)
-					.join("\n") || "No exercise templates found";
+			const rows: ExerciseTemplateListItem[] = Array.isArray(
+				templates.exercise_templates,
+			)
+				? templates.exercise_templates
+				: [];
 
 			return {
 				content: [
 					text(
-						`Retrieved ${templates.exercise_templates?.length || 0} exercise templates (page ${templates.page} of ${templates.page_count})`,
+						`Retrieved ${rows.length} exercise templates (page ${templates.page} of ${templates.page_count})`,
 					),
-					text(summary),
+					text(formatExerciseTemplateList(rows)),
+				],
+			};
+		},
+	);
+
+	tool(
+		"search_exercise_templates",
+		{
+			title: "Search exercises",
+			description:
+				"Find exercise templates whose title contains a query (case-insensitive), including custom exercises. Pages through the Hevy library and returns matching titles and ids. Optional page/page_size paginate the matches, not the upstream catalog.",
+			inputSchema: {
+				query: z
+					.string()
+					.trim()
+					.min(1)
+					.describe(
+						"Case-insensitive substring to match against exercise titles",
+					),
+				page: pageParam,
+				page_size: pageSizeParam(PAGINATION_LIMITS.EXERCISE_TEMPLATES, 20),
+			},
+			annotations: READ_ONLY,
+		},
+		async ({ query, page, page_size }, client) => {
+			const matches = filterExerciseTemplatesByTitle(
+				await loadAllExerciseTemplates(client),
+				query,
+			);
+			const paged = paginateItems(matches, page, page_size);
+
+			return {
+				content: [
+					text(
+						`Found ${matches.length} exercise templates matching "${query}" (page ${paged.page} of ${paged.page_count})`,
+					),
+					text(
+						formatExerciseTemplateList(
+							paged.items,
+							`No exercise templates matched "${query}"`,
+						),
+					),
 				],
 			};
 		},
@@ -521,7 +601,7 @@ export function registerHevyTools(
 		{
 			title: "Create custom exercise",
 			description:
-				"Create a custom exercise in the user's library. Check get_exercise_templates first to avoid duplicating a built-in exercise.",
+				"Create a custom exercise in the user's library and return its exercise_template_id. Search first with search_exercise_templates to avoid duplicating a built-in exercise.",
 			inputSchema: CreateExerciseTemplateSchema.shape,
 			annotations: CREATES,
 		},

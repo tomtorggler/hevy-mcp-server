@@ -29,7 +29,7 @@ src/
 ├── app.ts               # Hono app: global CORS (incl. Mcp-* headers), onError, route mounting (OAuth → MCP → utility)
 ├── github-handler.ts    # OAuth 2.1 authorization server + setup pages + key management API
 ├── mcp-handler.ts       # handleMcpRequest(): createMcpHandler (agents/mcp/server) per request, per-user Hevy client cache
-├── tools.ts             # createHevyServer()/registerHevyTools(): all 17 tools on an SDK v2 McpServer
+├── tools.ts             # createHevyServer()/registerHevyTools(): all tools on an SDK v2 McpServer
 ├── tool-catalog.ts      # TOOL_GROUPS / TOOL_NAMES: the one list of tools (home page + tests derive from it)
 ├── version.ts           # VERSION read from package.json (used by /health, server info, pages)
 ├── utils.ts             # Props type + GitHub OAuth helpers
@@ -85,13 +85,13 @@ api.json                 # Snapshot of Hevy's OpenAPI spec (https://api.hevyapp.
 
 ## Tools
 
-17 tools registered in `src/tools.ts` via `server.registerTool` with `title`, `description`, `inputSchema` (a `z.object()`; the raw-shape form is deprecated in SDK v2) and `annotations` (`readOnlyHint` for `get_*`, `destructiveHint` for `update_*`). The server also publishes `instructions` (never guess exercise IDs, ISO 8601 times, update tools replace the whole record). Schema violations come back as `isError` tool results, not protocol errors.
+Tools registered in `src/tools.ts` via `server.registerTool` with `title`, `description`, `inputSchema` (a `z.object()`; the raw-shape form is deprecated in SDK v2) and `annotations` (`readOnlyHint` for `get_*` and `search_*`, `destructiveHint` for `update_*`). The server also publishes `instructions` (never guess exercise IDs, ISO 8601 times, update tools replace the whole record). Schema violations come back as `isError` tool results, not protocol errors.
 
 | Group | Tools |
 | --- | --- |
 | Workouts | `get_workouts`, `get_workout`, `create_workout`, `update_workout`, `get_workouts_count`, `get_workout_events` |
 | Routines | `get_routines`, `get_routine`, `create_routine`, `update_routine` |
-| Exercises | `get_exercise_templates`, `get_exercise_template`, `create_exercise_template`, `get_exercise_history` |
+| Exercises | `get_exercise_templates`, `search_exercise_templates`, `get_exercise_template`, `create_exercise_template`, `get_exercise_history` |
 | Folders | `get_routine_folders`, `get_routine_folder`, `create_routine_folder` |
 | Body & profile | `get_user_info`, `get_body_measurements`, `get_body_measurement`, `log_body_measurement`, `update_body_measurement` |
 

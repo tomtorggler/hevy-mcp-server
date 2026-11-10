@@ -7,7 +7,7 @@ A remote [Model Context Protocol](https://modelcontextprotocol.io/) server for t
 - **Multi-user**: sign in with GitHub, add your own Hevy API key, done. One deployment serves many people.
 - **Standards-based auth**: OAuth 2.1 with PKCE, protected resource metadata (RFC 9728), Client ID Metadata Documents and Dynamic Client Registration. Works out of the box as a custom connector in Claude.
 - **Stateless Streamable HTTP** at `/mcp`, built on MCP SDK v2 (protocol 2026-07-28, with 2025-era clients served transparently). No sessions, no Durable Objects.
-- **17 tools** with titles, descriptions and annotations covering the Hevy public API.
+- **Tools** with titles, descriptions and annotations covering the Hevy public API.
 
 ## 🏋️ Tools
 
@@ -15,7 +15,7 @@ A remote [Model Context Protocol](https://modelcontextprotocol.io/) server for t
 | --- | --- |
 | Workouts | `get_workouts`, `get_workout`, `create_workout`, `update_workout`, `get_workouts_count`, `get_workout_events` |
 | Routines | `get_routines`, `get_routine`, `create_routine`, `update_routine` |
-| Exercises | `get_exercise_templates`, `get_exercise_template`, `create_exercise_template`, `get_exercise_history` |
+| Exercises | `get_exercise_templates`, `search_exercise_templates`, `get_exercise_template`, `create_exercise_template`, `get_exercise_history` |
 | Folders | `get_routine_folders`, `get_routine_folder`, `create_routine_folder` |
 | Body & profile | `get_user_info`, `get_body_measurements`, `get_body_measurement`, `log_body_measurement`, `update_body_measurement` |
 
@@ -82,7 +82,7 @@ npx @modelcontextprotocol/inspector http://localhost:8787/mcp
 
 > "Create a Push Day routine with bench press 4 sets of 8–12 at 100 kg and overhead press 3×10 at 60 kg"
 
-The assistant looks up exercise IDs with `get_exercise_templates`, then calls the matching write tool. The server publishes instructions so clients know that `update_*` tools replace the whole record and that exercise IDs must never be guessed.
+The assistant looks up exercise IDs with `search_exercise_templates` or `get_exercise_templates`, then calls the matching write tool. The server publishes instructions so clients know that `update_*` tools replace the whole record and that exercise IDs must never be guessed.
 
 ## 🔧 Data shapes
 

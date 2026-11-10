@@ -36,6 +36,7 @@ export const TOOL_GROUPS: readonly ToolGroup[] = [
 			"Look up Hevy's exercise library, add custom exercises, track progress per lift.",
 		tools: [
 			"get_exercise_templates",
+			"search_exercise_templates",
 			"get_exercise_template",
 			"create_exercise_template",
 			"get_exercise_history",

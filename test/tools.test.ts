@@ -6,9 +6,9 @@ import {
 	SERVER_INSTRUCTIONS,
 	TOOL_NAMES,
 } from "../src/tools.js";
-import type { HevyClient } from "../src/lib/client.js";
-import { HevyApiError } from "../src/lib/client.js";
+import { HevyClient, HevyApiError } from "../src/lib/client.js";
 import { VERSION } from "../src/version.js";
+import { mockFetchPlainText } from "./setup.js";
 
 /**
  * Drives the real tool surface through the MCP protocol with an in-memory
@@ -73,7 +73,8 @@ describe("Hevy MCP tool surface", () => {
 			expect(tool.annotations, tool.name).toBeDefined();
 			expect(tool.annotations?.openWorldHint, tool.name).toBe(false);
 
-			const isRead = tool.name.startsWith("get_");
+			const isRead =
+				tool.name.startsWith("get_") || tool.name.startsWith("search_");
 			expect(tool.annotations?.readOnlyHint, tool.name).toBe(isRead);
 			if (tool.name.startsWith("update_")) {
 				expect(tool.annotations?.destructiveHint, tool.name).toBe(true);
@@ -88,9 +89,16 @@ describe("Hevy MCP tool surface", () => {
 		expect(schema.properties.page_size.maximum).toBe(10);
 		expect(schema.properties.page.minimum).toBe(1);
 
-		const templates = tools.find((t) => t.name === "get_exercise_templates")!
-			.inputSchema as any;
-		expect(templates.properties.page_size.maximum).toBe(100);
+		const templatesTool = tools.find(
+			(t) => t.name === "get_exercise_templates",
+		)!;
+		expect(
+			(templatesTool.inputSchema as any).properties.page_size.maximum,
+		).toBe(100);
+		expect(templatesTool.description).not.toMatch(/there is no search/i);
+
+		const search = tools.find((t) => t.name === "search_exercise_templates")!;
+		expect((search.inputSchema as any).required).toContain("query");
 	});
 
 	it("calls through to the Hevy client", async () => {
@@ -212,6 +220,166 @@ describe("Hevy MCP tool surface", () => {
 			weight_kg: 81,
 			waist: null,
 		});
+	});
+
+	it("searches exercise titles case-insensitively across catalog pages", async () => {
+		hevy.getExerciseTemplates = vi
+			.fn()
+			.mockResolvedValueOnce({
+				page: 1,
+				page_count: 2,
+				exercise_templates: [
+					{
+						id: "1",
+						title: "Bench Press (Barbell)",
+						type: "weight_reps",
+						primary_muscle_group: "chest",
+						is_custom: false,
+					},
+					{
+						id: "2",
+						title: "Pallof Press",
+						type: "weight_reps",
+						primary_muscle_group: "abdominals",
+						is_custom: false,
+					},
+				],
+			})
+			.mockResolvedValueOnce({
+				page: 2,
+				page_count: 2,
+				exercise_templates: [
+					{
+						id: "3",
+						title: "My Custom Pallof",
+						type: "weight_reps",
+						primary_muscle_group: "abdominals",
+						is_custom: true,
+					},
+					{
+						id: "4",
+						title: "Squat",
+						type: "weight_reps",
+						primary_muscle_group: "quadriceps",
+						is_custom: false,
+					},
+				],
+			});
+
+		const result = (await client.callTool({
+			name: "search_exercise_templates",
+			arguments: { query: "pallof" },
+		})) as any;
+
+		expect(result.isError).toBeFalsy();
+		expect(hevy.getExerciseTemplates).toHaveBeenCalledTimes(2);
+		expect(hevy.getExerciseTemplates).toHaveBeenNthCalledWith(1, {
+			page: 1,
+			pageSize: 100,
+		});
+		const output = result.content
+			.map((part: { text: string }) => part.text)
+			.join("\n");
+		expect(output).toContain('Found 2 exercise templates matching "pallof"');
+		expect(output).toContain("Pallof Press");
+		expect(output).toContain("My Custom Pallof");
+		expect(output).toContain("ID: 2");
+		expect(output).toContain("ID: 3");
+		expect(output).toContain("Custom: Yes");
+		expect(output).not.toContain("Bench Press");
+		expect(output).not.toContain("Squat");
+	});
+
+	it("paginates search matches independently of the Hevy catalog pages", async () => {
+		hevy.getExerciseTemplates = vi.fn().mockResolvedValue({
+			page: 1,
+			page_count: 1,
+			exercise_templates: [
+				{ id: "1", title: "Curl A", type: "weight_reps" },
+				{ id: "2", title: "Curl B", type: "weight_reps" },
+				{ id: "3", title: "Press", type: "weight_reps" },
+			],
+		});
+
+		const result = (await client.callTool({
+			name: "search_exercise_templates",
+			arguments: { query: "curl", page: 2, page_size: 1 },
+		})) as any;
+
+		const output = result.content
+			.map((part: { text: string }) => part.text)
+			.join("\n");
+		expect(output).toContain(
+			'Found 2 exercise templates matching "curl" (page 2 of 2)',
+		);
+		expect(output).toContain("Curl B");
+		expect(output).not.toContain("Curl A");
+		expect(output).not.toContain("Press");
+	});
+
+	it("returns an empty search page when nothing matches", async () => {
+		hevy.getExerciseTemplates = vi.fn().mockResolvedValue({
+			page: 1,
+			page_count: 1,
+			exercise_templates: [{ id: "1", title: "Squat", type: "weight_reps" }],
+		});
+
+		const result = (await client.callTool({
+			name: "search_exercise_templates",
+			arguments: { query: "pallof" },
+		})) as any;
+
+		const output = result.content
+			.map((part: { text: string }) => part.text)
+			.join("\n");
+		expect(output).toContain('Found 0 exercise templates matching "pallof"');
+		expect(output).toContain('No exercise templates matched "pallof"');
+	});
+
+	it("reports the new exercise template id after create", async () => {
+		hevy.createExerciseTemplate = vi.fn().mockResolvedValue({
+			id: "d0778813-ce6b-4f40-a3ec-a9c0f254e3d3",
+		});
+
+		const result = (await client.callTool({
+			name: "create_exercise_template",
+			arguments: {
+				title: "Larsen Bench Press",
+				exercise_type: "weight_reps",
+				equipment_category: "barbell",
+				muscle_group: "chest",
+			},
+		})) as any;
+
+		expect(result.isError).toBeFalsy();
+		expect(result.content[0].text).toContain("Larsen Bench Press");
+		expect(result.content[1].text).toBe(
+			"Exercise Template ID: d0778813-ce6b-4f40-a3ec-a9c0f254e3d3",
+		);
+	});
+
+	it("reports the id when Hevy returns a plain-text POST body", async () => {
+		await cleanup();
+		await connect(async () => new HevyClient({ apiKey: "test-api-key" }));
+		const id = "d0778813-ce6b-4f40-a3ec-a9c0f254e3d3";
+		mockFetchPlainText(id);
+
+		const result = (await client.callTool({
+			name: "create_exercise_template",
+			arguments: {
+				title: "Larsen Bench Press",
+				exercise_type: "weight_reps",
+				equipment_category: "barbell",
+				muscle_group: "chest",
+			},
+		})) as any;
+
+		const output = result.content
+			.map((part: { text: string }) => part.text)
+			.join("\n");
+		expect(result.isError).toBeFalsy();
+		expect(output).toContain(`Exercise Template ID: ${id}`);
+		expect(output).not.toContain("undefined");
 	});
 
 	it("explains how to configure a missing API key instead of failing the session", async () => {
