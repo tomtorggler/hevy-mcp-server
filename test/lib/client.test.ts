@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { HevyClient, HevyApiError } from '../../src/lib/client';
-import { mockFetchSuccess, mockFetchError } from '../setup';
+import { mockFetchSuccess, mockFetchError, mockFetchPlainText } from '../setup';
 
 /**
  * Tests based on the Hevy API OpenAPI specification (api.json)
@@ -851,8 +851,16 @@ describe('HevyClient - API Contract Compliance', () => {
 
       const result = await client.createExerciseTemplate({ exercise: {} });
 
-      expect(result).toHaveProperty('id');
-      expect(typeof result.id).toBe('number');
+      expect(result).toEqual({ id: '123' });
+    });
+
+    it('parses the real Hevy POST body: a text/plain uuid, not JSON', async () => {
+      const id = 'd0778813-ce6b-4f40-a3ec-a9c0f254e3d3';
+      mockFetchPlainText(id);
+
+      const result = await client.createExerciseTemplate({ exercise: {} });
+
+      expect(result).toEqual({ id });
     });
 
     it('should handle 403 error when custom exercise limit exceeded (per spec line 741-757)', async () => {

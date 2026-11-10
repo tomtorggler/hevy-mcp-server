@@ -1,3 +1,8 @@
+import {
+  parseCreatedExerciseTemplate,
+  type CreatedExerciseTemplate,
+} from './exercise-templates.js';
+
 /**
  * Configuration options for the Hevy API client
  */
@@ -267,8 +272,9 @@ export class HevyClient {
   /**
    * Create a new custom exercise template
    */
-  async createExerciseTemplate(exercise: any): Promise<any> {
-    return this.post<any>('/v1/exercise_templates', exercise);
+  async createExerciseTemplate(exercise: unknown): Promise<CreatedExerciseTemplate> {
+    const data = await this.post<unknown>('/v1/exercise_templates', exercise);
+    return parseCreatedExerciseTemplate(data);
   }
 
   // ============================================

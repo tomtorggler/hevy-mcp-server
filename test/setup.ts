@@ -22,6 +22,22 @@ export function mockFetchSuccess(data: any, status = 200) {
 }
 
 /**
+ * Hevy's POST /v1/exercise_templates returns the new id as text/plain, not JSON.
+ */
+export function mockFetchPlainText(body: string, status = 200) {
+  (global.fetch as any).mockResolvedValueOnce({
+    ok: status >= 200 && status < 300,
+    status,
+    statusText: 'OK',
+    headers: new Headers({ 'Content-Type': 'text/plain' }),
+    json: async () => {
+      throw new Error('not JSON');
+    },
+    text: async () => body,
+  });
+}
+
+/**
  * Helper to mock a failed fetch response
  */
 export function mockFetchError(status: number, message: string, data?: any) {

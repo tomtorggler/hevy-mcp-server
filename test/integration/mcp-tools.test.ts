@@ -599,7 +599,7 @@ describe("MCP Tools Integration Tests", () => {
 
 	describe("create_exercise_template", () => {
 		it("should successfully create a custom exercise template", async () => {
-			mockFetchSuccess({ id: "new-template-id", title: "My Exercise" });
+			mockFetchSuccess({ id: "new-template-id" });
 
 			const templateData = {
 				title: "My Exercise",
@@ -637,7 +637,7 @@ describe("MCP Tools Integration Tests", () => {
 		});
 
 		it("should handle templates with secondary muscles", async () => {
-			mockFetchSuccess({ id: "new-template-id", title: "My Exercise" });
+			mockFetchSuccess({ id: "new-template-id" });
 
 			const templateData = {
 				title: "My Exercise",
