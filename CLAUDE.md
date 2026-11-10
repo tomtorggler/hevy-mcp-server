@@ -135,6 +135,7 @@ Bindings (`wrangler.jsonc`): `OAUTH_KV` (KV) only. The `MyMCP` Durable Object cl
 
 ## Version history
 
+- **4.2.0** (2026-11) `create_exercise_template` returns the real Hevy id instead of `undefined` (#6). New `search_exercise_templates` tool for case-insensitive title match, including custom exercises (#7).
 - **4.1.0** (2026-10) Five new tools for Hevy's profile and body-measurement endpoints (`get_user_info`, `get_body_measurements`, `get_body_measurement`, `log_body_measurement`, `update_body_measurement`); home page tool count derived from the catalog.
 - **4.0.0** (2026-10) Stateless MCP endpoint on MCP SDK v2 / Agents SDK 0.32 `createMcpHandler`; Durable Object `MyMCP` deleted (migration `v2`); `/sse` returns 410; CORS allows `Mcp-*` headers; Zod 4; `cpu_ms` 1000; `account_id` pinned. Tools unchanged.
 - **3.2.0** (2026-10) Interface refresh and security hardening: shared UI layout with dark mode and current client instructions; `redirect_uri` validation against registrations / Client ID Metadata Documents; mandatory PKCE S256; `iss` in authorization responses; separate bearer tokens per client; RFC 9728 `WWW-Authenticate` challenge and path-suffixed protected resource metadata; HTML escaping on consent/setup pages; tools moved to `src/tools.ts` with titles, descriptions, annotations and server instructions; API key loaded lazily per call instead of failing session init; removed unused deps (`@cloudflare/workers-oauth-provider`, `octokit`); `api.json` refreshed from the live Hevy spec.
