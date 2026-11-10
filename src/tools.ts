@@ -41,7 +41,6 @@ import {
 	toBodyMeasurementPayload,
 } from "./lib/body-schemas.js";
 import {
-	parseExerciseTemplatesPage,
 	searchExerciseTemplates,
 	type ExerciseTemplateListItem,
 } from "./lib/exercise-templates.js";
@@ -486,12 +485,10 @@ export function registerHevyTools(
 			annotations: READ_ONLY,
 		},
 		async ({ page, page_size }, client) => {
-			const templates = parseExerciseTemplatesPage(
-				await client.getExerciseTemplates({
-					page,
-					pageSize: page_size,
-				}),
-			);
+			const templates = await client.getExerciseTemplates({
+				page,
+				pageSize: page_size,
+			});
 
 			return {
 				content: [

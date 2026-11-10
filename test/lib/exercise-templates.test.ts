@@ -50,12 +50,28 @@ describe("parseExerciseTemplatesPage", () => {
 			parseExerciseTemplatesPage({
 				page: 2,
 				page_count: 5,
-				exercise_templates: [{ id: "1", title: "Bench" }],
+				exercise_templates: [
+					{
+						id: "1",
+						title: "Bench",
+						type: "weight_reps",
+						primary_muscle_group: "chest",
+						is_custom: false,
+					},
+				],
 			}),
 		).toEqual({
 			page: 2,
 			page_count: 5,
-			exercise_templates: [{ id: "1", title: "Bench" }],
+			exercise_templates: [
+				{
+					id: "1",
+					title: "Bench",
+					type: "weight_reps",
+					primary_muscle_group: "chest",
+					is_custom: false,
+				},
+			],
 		});
 	});
 
@@ -63,9 +79,19 @@ describe("parseExerciseTemplatesPage", () => {
 		expect(() =>
 			parseExerciseTemplatesPage({ exercise_templates: [] }),
 		).toThrow("Hevy did not return a paginated exercise template list");
-		expect(() => parseExerciseTemplatesPage({ page_count: 1 })).toThrow(
+		expect(() => parseExerciseTemplatesPage({ page: 1, page_count: 1 })).toThrow(
 			/exercise_templates/,
 		);
+	});
+
+	it("rejects a row missing the fields the list prints", () => {
+		expect(() =>
+			parseExerciseTemplatesPage({
+				page: 1,
+				page_count: 1,
+				exercise_templates: [{ id: "1", title: "Bench" }],
+			}),
+		).toThrow(/type/);
 	});
 });
 
@@ -75,12 +101,28 @@ describe("searchExerciseTemplates", () => {
 			1: {
 				page: 1,
 				page_count: 2,
-				exercise_templates: [{ id: "1", title: "Curl A" }],
+				exercise_templates: [
+					{
+						id: "1",
+						title: "Curl A",
+						type: "weight_reps",
+						primary_muscle_group: "biceps",
+						is_custom: false,
+					},
+				],
 			},
 			2: {
 				page: 2,
 				page_count: 99,
-				exercise_templates: [{ id: "2", title: "Curl B" }],
+				exercise_templates: [
+					{
+						id: "2",
+						title: "Curl B",
+						type: "weight_reps",
+						primary_muscle_group: "biceps",
+						is_custom: false,
+					},
+				],
 			},
 		};
 		const fetched: number[] = [];
@@ -99,10 +141,7 @@ describe("searchExerciseTemplates", () => {
 
 		expect(fetched).toEqual([1, 2]);
 		expect(result.total).toBe(2);
-		expect(result.items).toEqual([
-			{ id: "1", title: "Curl A" },
-			{ id: "2", title: "Curl B" },
-		]);
+		expect(result.items.map((item) => item.id)).toEqual(["1", "2"]);
 	});
 
 	it("matches titles case-insensitively, including custom exercises, and paginates matches", async () => {
@@ -111,10 +150,34 @@ describe("searchExerciseTemplates", () => {
 				page: 1,
 				page_count: 1,
 				exercise_templates: [
-					{ id: "1", title: "Bench Press (Barbell)", is_custom: false },
-					{ id: "2", title: "Pallof Press", is_custom: false },
-					{ id: "3", title: "My Custom Pallof", is_custom: true },
-					{ id: "4", title: "Squat", is_custom: false },
+					{
+						id: "1",
+						title: "Bench Press (Barbell)",
+						type: "weight_reps",
+						primary_muscle_group: "chest",
+						is_custom: false,
+					},
+					{
+						id: "2",
+						title: "Pallof Press",
+						type: "weight_reps",
+						primary_muscle_group: "abdominals",
+						is_custom: false,
+					},
+					{
+						id: "3",
+						title: "My Custom Pallof",
+						type: "weight_reps",
+						primary_muscle_group: "abdominals",
+						is_custom: true,
+					},
+					{
+						id: "4",
+						title: "Squat",
+						type: "weight_reps",
+						primary_muscle_group: "quadriceps",
+						is_custom: false,
+					},
 				],
 			}),
 			"PALLOF",
@@ -127,7 +190,13 @@ describe("searchExerciseTemplates", () => {
 		expect(result.page).toBe(2);
 		expect(result.page_count).toBe(2);
 		expect(result.items).toEqual([
-			{ id: "3", title: "My Custom Pallof", is_custom: true },
+			{
+				id: "3",
+				title: "My Custom Pallof",
+				type: "weight_reps",
+				primary_muscle_group: "abdominals",
+				is_custom: true,
+			},
 		]);
 	});
 
@@ -137,7 +206,15 @@ describe("searchExerciseTemplates", () => {
 				async () => ({
 					page: 1,
 					page_count: 21,
-					exercise_templates: [{ id: "1", title: "Curl" }],
+					exercise_templates: [
+						{
+							id: "1",
+							title: "Curl",
+							type: "weight_reps",
+							primary_muscle_group: "biceps",
+							is_custom: false,
+						},
+					],
 				}),
 				"curl",
 				1,

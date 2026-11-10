@@ -39,16 +39,16 @@ export function parseCreatedExerciseTemplate(
 const ExerciseTemplateListItemSchema = z.object({
 	id: z.string().min(1),
 	title: z.string().min(1),
-	type: z.string().optional(),
-	primary_muscle_group: z.string().optional(),
-	is_custom: z.boolean().optional(),
+	type: z.string().min(1),
+	primary_muscle_group: z.string().min(1),
+	is_custom: z.boolean(),
 });
 export type ExerciseTemplateListItem = z.infer<
 	typeof ExerciseTemplateListItemSchema
 >;
 
 const ExerciseTemplatesPageSchema = z.object({
-	page: z.number().int().positive().default(1),
+	page: z.number().int().positive(),
 	page_count: z.number().int().nonnegative(),
 	exercise_templates: z.array(ExerciseTemplateListItemSchema),
 });
@@ -65,10 +65,10 @@ export function parseExerciseTemplatesPage(data: unknown): ExerciseTemplatesPage
 }
 
 async function collectExerciseTemplates(
-	fetchPage: (page: number, pageSize: number) => Promise<unknown>,
+	fetchPage: (page: number, pageSize: number) => Promise<ExerciseTemplatesPage>,
 	pageSize: number,
 ): Promise<ExerciseTemplateListItem[]> {
-	const first = parseExerciseTemplatesPage(await fetchPage(1, pageSize));
+	const first = await fetchPage(1, pageSize);
 	if (first.page_count > MAX_CATALOG_PAGES) {
 		throw new Error(
 			`Hevy reported ${first.page_count} exercise-template pages; search stops at ${MAX_CATALOG_PAGES}`,
@@ -76,14 +76,14 @@ async function collectExerciseTemplates(
 	}
 	const rest = await Promise.all(
 		Array.from({ length: Math.max(0, first.page_count - 1) }, (_, index) =>
-			fetchPage(index + 2, pageSize).then(parseExerciseTemplatesPage),
+			fetchPage(index + 2, pageSize),
 		),
 	);
 	return [first, ...rest].flatMap((entry) => entry.exercise_templates);
 }
 
 export async function searchExerciseTemplates(
-	fetchPage: (page: number, pageSize: number) => Promise<unknown>,
+	fetchPage: (page: number, pageSize: number) => Promise<ExerciseTemplatesPage>,
 	query: string,
 	page: number,
 	pageSize: number,

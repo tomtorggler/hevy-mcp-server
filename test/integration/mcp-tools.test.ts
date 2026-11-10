@@ -537,7 +537,13 @@ describe("MCP Tools Integration Tests", () => {
 				page: 1,
 				page_count: 1,
 				exercise_templates: [
-					{ id: "template-1", title: "Bench Press", type: "weight_reps" },
+					{
+						id: "template-1",
+						title: "Bench Press",
+						type: "weight_reps",
+						primary_muscle_group: "chest",
+						is_custom: false,
+					},
 				],
 			};
 			mockFetchSuccess(mockTemplates);

@@ -295,9 +295,27 @@ describe("Hevy MCP tool surface", () => {
 			page: 1,
 			page_count: 1,
 			exercise_templates: [
-				{ id: "1", title: "Curl A", type: "weight_reps" },
-				{ id: "2", title: "Curl B", type: "weight_reps" },
-				{ id: "3", title: "Press", type: "weight_reps" },
+				{
+					id: "1",
+					title: "Curl A",
+					type: "weight_reps",
+					primary_muscle_group: "biceps",
+					is_custom: false,
+				},
+				{
+					id: "2",
+					title: "Curl B",
+					type: "weight_reps",
+					primary_muscle_group: "biceps",
+					is_custom: false,
+				},
+				{
+					id: "3",
+					title: "Press",
+					type: "weight_reps",
+					primary_muscle_group: "chest",
+					is_custom: false,
+				},
 			],
 		});
 
@@ -321,7 +339,15 @@ describe("Hevy MCP tool surface", () => {
 		hevy.getExerciseTemplates = vi.fn().mockResolvedValue({
 			page: 1,
 			page_count: 1,
-			exercise_templates: [{ id: "1", title: "Squat", type: "weight_reps" }],
+			exercise_templates: [
+				{
+					id: "1",
+					title: "Squat",
+					type: "weight_reps",
+					primary_muscle_group: "quadriceps",
+					is_custom: false,
+				},
+			],
 		});
 
 		const result = (await client.callTool({
