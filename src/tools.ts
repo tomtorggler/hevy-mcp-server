@@ -41,10 +41,8 @@ import {
 	toBodyMeasurementPayload,
 } from "./lib/body-schemas.js";
 import {
-	collectExerciseTemplates,
-	filterExerciseTemplatesByTitle,
-	paginateItems,
 	parseExerciseTemplatesPage,
+	searchExerciseTemplates,
 	type ExerciseTemplateListItem,
 } from "./lib/exercise-templates.js";
 import { TOOL_NAMES } from "./tool-catalog.js";
@@ -526,27 +524,25 @@ export function registerHevyTools(
 			annotations: READ_ONLY,
 		},
 		async ({ query, page, page_size }, client) => {
-			const matches = filterExerciseTemplatesByTitle(
-				await collectExerciseTemplates(
-					(catalogPage, catalogPageSize) =>
-						client.getExerciseTemplates({
-							page: catalogPage,
-							pageSize: catalogPageSize,
-						}),
-					PAGINATION_LIMITS.EXERCISE_TEMPLATES,
-				),
+			const result = await searchExerciseTemplates(
+				(catalogPage, catalogPageSize) =>
+					client.getExerciseTemplates({
+						page: catalogPage,
+						pageSize: catalogPageSize,
+					}),
 				query,
+				page,
+				page_size,
+				PAGINATION_LIMITS.EXERCISE_TEMPLATES,
 			);
-			const paged = paginateItems(matches, page, page_size);
-
 			return {
 				content: [
 					text(
-						`Found ${matches.length} exercise templates matching "${query}" (page ${paged.page} of ${paged.page_count})`,
+						`Found ${result.total} exercise templates matching "${query}" (page ${result.page} of ${result.page_count})`,
 					),
 					text(
 						formatExerciseTemplateList(
-							paged.items,
+							result.items,
 							`No exercise templates matched "${query}"`,
 						),
 					),

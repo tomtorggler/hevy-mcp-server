@@ -1,10 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
-	collectExerciseTemplates,
-	filterExerciseTemplatesByTitle,
-	paginateItems,
 	parseCreatedExerciseTemplate,
 	parseExerciseTemplatesPage,
+	searchExerciseTemplates,
 } from "../../src/lib/exercise-templates.js";
 
 describe("parseCreatedExerciseTemplate", () => {
@@ -33,9 +31,9 @@ describe("parseCreatedExerciseTemplate", () => {
 		).toEqual({ id: "new-template-id" });
 	});
 
-	it("rejects bodies with no id", () => {
+	it("rejects bodies with no id and names the missing field", () => {
 		expect(() => parseCreatedExerciseTemplate({})).toThrow(
-			"Hevy did not return an exercise template id",
+			/Hevy did not return an exercise template id.*id/,
 		);
 		expect(() => parseCreatedExerciseTemplate(null)).toThrow(
 			"Hevy did not return an exercise template id",
@@ -47,87 +45,107 @@ describe("parseCreatedExerciseTemplate", () => {
 });
 
 describe("parseExerciseTemplatesPage", () => {
-	it("reads page_count and defaults a missing template array to empty", () => {
-		expect(parseExerciseTemplatesPage({ page: 2, page_count: 5 })).toEqual({
+	it("reads page, page_count, and the template rows", () => {
+		expect(
+			parseExerciseTemplatesPage({
+				page: 2,
+				page_count: 5,
+				exercise_templates: [{ id: "1", title: "Bench" }],
+			}),
+		).toEqual({
 			page: 2,
 			page_count: 5,
-			exercise_templates: [],
+			exercise_templates: [{ id: "1", title: "Bench" }],
 		});
 	});
 
-	it("rejects a body with no page_count instead of inventing one", () => {
+	it("rejects a body with no page_count or template array", () => {
 		expect(() =>
 			parseExerciseTemplatesPage({ exercise_templates: [] }),
 		).toThrow("Hevy did not return a paginated exercise template list");
+		expect(() => parseExerciseTemplatesPage({ page_count: 1 })).toThrow(
+			/exercise_templates/,
+		);
 	});
 });
 
-describe("collectExerciseTemplates", () => {
-	it("walks every catalog page and concatenates the rows", async () => {
-		const pages = [
-			{
+describe("searchExerciseTemplates", () => {
+	it("walks every catalog page page 1 announced, even if a later page lies about page_count", async () => {
+		const pages: Record<number, object> = {
+			1: {
 				page: 1,
 				page_count: 2,
-				exercise_templates: [{ id: "1", title: "A" }],
+				exercise_templates: [{ id: "1", title: "Curl A" }],
 			},
-			{
+			2: {
 				page: 2,
-				page_count: 2,
-				exercise_templates: [{ id: "2", title: "B" }],
+				page_count: 99,
+				exercise_templates: [{ id: "2", title: "Curl B" }],
 			},
-		];
-		const fetched: Array<{ page: number; pageSize: number }> = [];
+		};
+		const fetched: number[] = [];
 
-		const templates = await collectExerciseTemplates(async (page, pageSize) => {
-			fetched.push({ page, pageSize });
-			return pages[page - 1];
-		}, 100);
+		const result = await searchExerciseTemplates(
+			async (page, pageSize) => {
+				fetched.push(page);
+				expect(pageSize).toBe(100);
+				return pages[page];
+			},
+			"curl",
+			1,
+			20,
+			100,
+		);
 
-		expect(fetched).toEqual([
-			{ page: 1, pageSize: 100 },
-			{ page: 2, pageSize: 100 },
-		]);
-		expect(templates).toEqual([
-			{ id: "1", title: "A" },
-			{ id: "2", title: "B" },
+		expect(fetched).toEqual([1, 2]);
+		expect(result.total).toBe(2);
+		expect(result.items).toEqual([
+			{ id: "1", title: "Curl A" },
+			{ id: "2", title: "Curl B" },
 		]);
 	});
-});
 
-describe("filterExerciseTemplatesByTitle", () => {
-	const templates = [
-		{ id: "1", title: "Bench Press (Barbell)" },
-		{ id: "2", title: "Pallof Press" },
-		{ id: "3", title: "My Custom Pallof", is_custom: true },
-		{ id: "4", title: "Squat" },
-		{ id: "5", title: undefined },
-	];
+	it("matches titles case-insensitively, including custom exercises, and paginates matches", async () => {
+		const result = await searchExerciseTemplates(
+			async () => ({
+				page: 1,
+				page_count: 1,
+				exercise_templates: [
+					{ id: "1", title: "Bench Press (Barbell)", is_custom: false },
+					{ id: "2", title: "Pallof Press", is_custom: false },
+					{ id: "3", title: "My Custom Pallof", is_custom: true },
+					{ id: "4", title: "Squat", is_custom: false },
+				],
+			}),
+			"PALLOF",
+			2,
+			1,
+			100,
+		);
 
-	it("matches titles case-insensitively, including custom exercises", () => {
-		expect(filterExerciseTemplatesByTitle(templates, "pallof")).toEqual([
-			{ id: "2", title: "Pallof Press" },
+		expect(result.total).toBe(2);
+		expect(result.page).toBe(2);
+		expect(result.page_count).toBe(2);
+		expect(result.items).toEqual([
 			{ id: "3", title: "My Custom Pallof", is_custom: true },
 		]);
-		expect(filterExerciseTemplatesByTitle(templates, "PALLOF")).toHaveLength(2);
 	});
 
-	it("returns no rows for a blank query", () => {
-		expect(filterExerciseTemplatesByTitle(templates, "   ")).toEqual([]);
-	});
-});
-
-describe("paginateItems", () => {
-	it("slices a filtered list and reports page_count from the match total", () => {
-		const items = ["a", "b", "c"];
-		expect(paginateItems(items, 2, 1)).toEqual({
-			page: 2,
-			page_count: 3,
-			items: ["b"],
-		});
-		expect(paginateItems([], 1, 20)).toEqual({
-			page: 1,
-			page_count: 1,
-			items: [],
-		});
+	it("throws when Hevy reports more catalog pages than the search cap", async () => {
+		await expect(
+			searchExerciseTemplates(
+				async () => ({
+					page: 1,
+					page_count: 21,
+					exercise_templates: [{ id: "1", title: "Curl" }],
+				}),
+				"curl",
+				1,
+				20,
+				100,
+			),
+		).rejects.toThrow(
+			"Hevy reported 21 exercise-template pages; search stops at 20",
+		);
 	});
 });
