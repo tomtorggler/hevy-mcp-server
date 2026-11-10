@@ -41,8 +41,10 @@ import {
 	toBodyMeasurementPayload,
 } from "./lib/body-schemas.js";
 import {
+	collectExerciseTemplates,
 	filterExerciseTemplatesByTitle,
 	paginateItems,
+	parseExerciseTemplatesPage,
 	type ExerciseTemplateListItem,
 } from "./lib/exercise-templates.js";
 import { TOOL_NAMES } from "./tool-catalog.js";
@@ -138,27 +140,6 @@ function formatExerciseTemplateList(
 				`${index + 1}. ${template.title} (${template.type})\n   ID: ${template.id}\n   Primary: ${template.primary_muscle_group}\n   Custom: ${template.is_custom ? "Yes" : "No"}`,
 		)
 		.join("\n");
-}
-
-async function loadAllExerciseTemplates(
-	client: HevyClient,
-): Promise<ExerciseTemplateListItem[]> {
-	const templates: ExerciseTemplateListItem[] = [];
-	let page = 1;
-	let pageCount = 1;
-	do {
-		const response = await client.getExerciseTemplates({
-			page,
-			pageSize: PAGINATION_LIMITS.EXERCISE_TEMPLATES,
-		});
-		const batch = Array.isArray(response.exercise_templates)
-			? response.exercise_templates
-			: [];
-		templates.push(...batch);
-		pageCount = Number(response.page_count) || page;
-		page += 1;
-	} while (page <= pageCount);
-	return templates;
 }
 
 /** Create a fully configured Hevy MCP server. */
@@ -507,22 +488,19 @@ export function registerHevyTools(
 			annotations: READ_ONLY,
 		},
 		async ({ page, page_size }, client) => {
-			const templates = await client.getExerciseTemplates({
-				page,
-				pageSize: page_size,
-			});
-			const rows: ExerciseTemplateListItem[] = Array.isArray(
-				templates.exercise_templates,
-			)
-				? templates.exercise_templates
-				: [];
+			const templates = parseExerciseTemplatesPage(
+				await client.getExerciseTemplates({
+					page,
+					pageSize: page_size,
+				}),
+			);
 
 			return {
 				content: [
 					text(
-						`Retrieved ${rows.length} exercise templates (page ${templates.page} of ${templates.page_count})`,
+						`Retrieved ${templates.exercise_templates.length} exercise templates (page ${templates.page} of ${templates.page_count})`,
 					),
-					text(formatExerciseTemplateList(rows)),
+					text(formatExerciseTemplateList(templates.exercise_templates)),
 				],
 			};
 		},
@@ -549,7 +527,14 @@ export function registerHevyTools(
 		},
 		async ({ query, page, page_size }, client) => {
 			const matches = filterExerciseTemplatesByTitle(
-				await loadAllExerciseTemplates(client),
+				await collectExerciseTemplates(
+					(catalogPage, catalogPageSize) =>
+						client.getExerciseTemplates({
+							page: catalogPage,
+							pageSize: catalogPageSize,
+						}),
+					PAGINATION_LIMITS.EXERCISE_TEMPLATES,
+				),
 				query,
 			);
 			const paged = paginateItems(matches, page, page_size);

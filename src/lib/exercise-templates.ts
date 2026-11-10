@@ -28,13 +28,52 @@ export function parseCreatedExerciseTemplate(
 	return { id: parsed.data };
 }
 
-export type ExerciseTemplateListItem = {
-	id?: string;
-	title?: string;
-	type?: string;
-	primary_muscle_group?: string;
-	is_custom?: boolean;
-};
+const ExerciseTemplateListItemSchema = z.object({
+	id: z.string().optional(),
+	title: z.string().optional(),
+	type: z.string().optional(),
+	primary_muscle_group: z.string().optional(),
+	is_custom: z.boolean().optional(),
+});
+export type ExerciseTemplateListItem = z.infer<
+	typeof ExerciseTemplateListItemSchema
+>;
+
+const ExerciseTemplatesPageSchema = z.object({
+	page: z.number().int().positive().optional().default(1),
+	page_count: z.number().int().nonnegative(),
+	exercise_templates: z
+		.array(ExerciseTemplateListItemSchema)
+		.optional()
+		.default([]),
+});
+export type ExerciseTemplatesPage = z.infer<typeof ExerciseTemplatesPageSchema>;
+
+export function parseExerciseTemplatesPage(data: unknown): ExerciseTemplatesPage {
+	const parsed = ExerciseTemplatesPageSchema.safeParse(data);
+	if (!parsed.success) {
+		throw new Error(
+			"Hevy did not return a paginated exercise template list from GET /v1/exercise_templates",
+		);
+	}
+	return parsed.data;
+}
+
+export async function collectExerciseTemplates(
+	fetchPage: (page: number, pageSize: number) => Promise<unknown>,
+	pageSize: number,
+): Promise<ExerciseTemplateListItem[]> {
+	const templates: ExerciseTemplateListItem[] = [];
+	let page = 1;
+	let pageCount = 1;
+	do {
+		const parsed = parseExerciseTemplatesPage(await fetchPage(page, pageSize));
+		templates.push(...parsed.exercise_templates);
+		pageCount = parsed.page_count;
+		page += 1;
+	} while (page <= pageCount);
+	return templates;
+}
 
 export function filterExerciseTemplatesByTitle<
 	T extends { title?: string | null },

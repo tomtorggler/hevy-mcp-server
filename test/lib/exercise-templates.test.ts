@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
+	collectExerciseTemplates,
 	filterExerciseTemplatesByTitle,
 	paginateItems,
 	parseCreatedExerciseTemplate,
+	parseExerciseTemplatesPage,
 } from "../../src/lib/exercise-templates.js";
 
 describe("parseCreatedExerciseTemplate", () => {
@@ -41,6 +43,54 @@ describe("parseCreatedExerciseTemplate", () => {
 		expect(() => parseCreatedExerciseTemplate("")).toThrow(
 			"Hevy did not return an exercise template id",
 		);
+	});
+});
+
+describe("parseExerciseTemplatesPage", () => {
+	it("reads page_count and defaults a missing template array to empty", () => {
+		expect(parseExerciseTemplatesPage({ page: 2, page_count: 5 })).toEqual({
+			page: 2,
+			page_count: 5,
+			exercise_templates: [],
+		});
+	});
+
+	it("rejects a body with no page_count instead of inventing one", () => {
+		expect(() =>
+			parseExerciseTemplatesPage({ exercise_templates: [] }),
+		).toThrow("Hevy did not return a paginated exercise template list");
+	});
+});
+
+describe("collectExerciseTemplates", () => {
+	it("walks every catalog page and concatenates the rows", async () => {
+		const pages = [
+			{
+				page: 1,
+				page_count: 2,
+				exercise_templates: [{ id: "1", title: "A" }],
+			},
+			{
+				page: 2,
+				page_count: 2,
+				exercise_templates: [{ id: "2", title: "B" }],
+			},
+		];
+		const fetched: Array<{ page: number; pageSize: number }> = [];
+
+		const templates = await collectExerciseTemplates(async (page, pageSize) => {
+			fetched.push({ page, pageSize });
+			return pages[page - 1];
+		}, 100);
+
+		expect(fetched).toEqual([
+			{ page: 1, pageSize: 100 },
+			{ page: 2, pageSize: 100 },
+		]);
+		expect(templates).toEqual([
+			{ id: "1", title: "A" },
+			{ id: "2", title: "B" },
+		]);
 	});
 });
 
